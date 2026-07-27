@@ -11,8 +11,12 @@ import { StatusBar } from 'expo-status-bar'
 import { LinearGradient } from 'expo-linear-gradient'
 import { useAuthStore } from '@/store'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useScanner } from '@/hooks/useScanner'
+import { useScanner, IS_WEB } from '@/hooks/useScanner'
+import { useRealtimeDetection } from '@/hooks/useRealtimeDetection'
+import { CameraOverlay } from '@/components/CameraOverlay'
 import { Colors, Fonts, FontSizes, Spacing, Radius, Shadows } from '@/constants/theme'
+import type { DetectionState } from '@/detection/CameraStateMachine'
+import type { DetectionClassification } from '@/detection/DetectionEngine'
 import {
   Image as ImageIcon, TextT, Lightning, LightningSlash,
   Scan, ArrowLeft, Camera, Warning, X
@@ -45,15 +49,45 @@ export default function ScannerScreen() {
     handleGalleryPick,
     handleManualSubmit,
     cancelProcessing,
+    recognizeFromUri,
   } = useScanner(user?.id || '', (scanId) => router.push(`/results/${scanId}`))
+
+  // ── Real-time detection ──
+  const handleAutoCapture = useCallback((uri: string) => {
+    // Feed the auto-captured photo into the existing OCR → manual-review pipeline
+    recognizeFromUri(uri)
+  }, [recognizeFromUri])
+
+  const {
+    detectionState,
+    confidence,
+    classification,
+    guidanceMessage,
+    isScanning,
+    startScanning,
+    stopScanning,
+    resetDetection,
+  } = useRealtimeDetection(cameraRef, cameraReady, handleAutoCapture)
+
+  // Start realtime scanning when camera becomes ready (native only)
+  useEffect(() => {
+    if (cameraReady && cameraActive && step === 'camera' && !IS_WEB) {
+      startScanning()
+    }
+    return () => { stopScanning() }
+  }, [cameraReady, cameraActive, step, startScanning, stopScanning])
 
   useFocusEffect(
     useCallback(() => {
       const task = InteractionManager.runAfterInteractions(() => {
         activateCamera()
       })
-      return () => { task.cancel(); deactivateCamera() }
-    }, [activateCamera, deactivateCamera])
+      return () => {
+        task.cancel()
+        deactivateCamera()
+        resetDetection()
+      }
+    }, [activateCamera, deactivateCamera, resetDetection])
   )
 
   if (step === 'processing') {
@@ -98,6 +132,11 @@ export default function ScannerScreen() {
       clearError={clearError}
       frameW={frameW}
       frameH={frameH}
+      detectionState={detectionState}
+      confidence={confidence}
+      classification={classification}
+      guidanceMessage={guidanceMessage}
+      isScanning={isScanning}
     />
   )
 }
@@ -242,7 +281,8 @@ function ManualScreen({
 function CameraScreen({
   cameraRef, cameraActive, cameraReady, onCameraReady,
   flash, onFlashToggle, onCapture, onGallery, onManual,
-  error, allowManual, clearError, frameW, frameH
+  error, allowManual, clearError, frameW, frameH,
+  detectionState, confidence, classification, guidanceMessage, isScanning
 }: {
   cameraRef: React.RefObject<CameraView | null>
   cameraActive: boolean; cameraReady: boolean; onCameraReady: () => void
@@ -250,8 +290,31 @@ function CameraScreen({
   onCapture: () => void; onGallery: () => void; onManual: () => void
   error?: string; allowManual?: boolean; clearError: () => void
   frameW: number; frameH: number
+  detectionState: DetectionState
+  confidence: number
+  classification: DetectionClassification
+  guidanceMessage: string
+  isScanning: boolean
 }) {
   const insets = useSafeAreaInsets()
+
+  // Determine top instruction text based on realtime detection
+  const getTopInstruction = () => {
+    if (!cameraReady) return 'Initialising camera...'
+    if (isScanning && guidanceMessage) return guidanceMessage
+    return 'Point at ingredient list'
+  }
+
+  // Determine bottom hint text
+  const getBottomHint = () => {
+    if (!cameraReady) return 'Please wait...'
+    if (detectionState === 'CONFIRMED' || detectionState === 'CAPTURING') {
+      return 'Auto capturing...'
+    }
+    if (isScanning) return 'Auto-capture enabled • or tap to capture'
+    return 'Tap the button to capture'
+  }
+
   return (
     <View style={styles.cameraContainer}>
       <StatusBar style="light" hidden />
@@ -278,20 +341,34 @@ function CameraScreen({
           </TouchableOpacity>
         </View>
         <Text style={styles.topInstruction}>
-          {cameraReady ? 'Point at ingredient list' : 'Initialising camera...'}
+          {getTopInstruction()}
         </Text>
       </View>
 
-      {/* Scan frame */}
-      <View style={styles.frameWrapper}>
-        <View style={[styles.frame, { width: frameW, height: frameH }]}>
-          <View style={[styles.corner, styles.tl]} />
-          <View style={[styles.corner, styles.tr]} />
-          <View style={[styles.corner, styles.bl]} />
-          <View style={[styles.corner, styles.br]} />
-          <View style={styles.scanLine} />
+      {/* Real-time detection overlay (replaces static frame when scanning) */}
+      {isScanning ? (
+        <View style={styles.frameWrapper}>
+          <CameraOverlay
+            state={detectionState}
+            confidence={confidence}
+            guidanceMessage={guidanceMessage}
+            classification={classification}
+            frameW={frameW}
+            frameH={frameH}
+          />
         </View>
-      </View>
+      ) : (
+        /* Static scan frame (fallback when not scanning, e.g. web) */
+        <View style={styles.frameWrapper}>
+          <View style={[styles.frame, { width: frameW, height: frameH }]}>
+            <View style={[styles.corner, styles.tl]} />
+            <View style={[styles.corner, styles.tr]} />
+            <View style={[styles.corner, styles.bl]} />
+            <View style={[styles.corner, styles.br]} />
+            <View style={styles.scanLine} />
+          </View>
+        </View>
+      )}
 
       {/* Error banner over camera */}
       {error ? (
@@ -340,7 +417,7 @@ function CameraScreen({
           </TouchableOpacity>
         </View>
         <Text style={styles.bottomHint}>
-          {cameraReady ? 'Tap the button to capture' : 'Please wait...'}
+          {getBottomHint()}
         </Text>
       </View>
     </View>

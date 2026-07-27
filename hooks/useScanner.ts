@@ -229,5 +229,6 @@ export function useScanner(userId: string, onSuccess: (scanId: string) => void) 
     handleGalleryPick,
     handleManualSubmit,
     cancelProcessing,
+    recognizeFromUri,
   }
 }
