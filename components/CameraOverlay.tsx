@@ -29,16 +29,36 @@ const OVERLAY_COLORS: Record<string, string> = {
   green: '#22C55E',
 }
 
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+function rgbToHex([r, g, b]: [number, number, number]): string {
+  const clamp = (v: number) => Math.round(Math.max(0, Math.min(255, v)))
+  return `#${[r, g, b].map((v) => clamp(v).toString(16).padStart(2, '0')).join('')}`
+}
+
+function lerpColor(from: string, to: string, t: number): string {
+  const [r1, g1, b1] = hexToRgb(from)
+  const [r2, g2, b2] = hexToRgb(to)
+  return rgbToHex([r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t])
+}
+
 function getOverlayColor(state: DetectionState, confidence: number): string {
-  switch (state) {
-    case 'CONFIRMED':
-    case 'CAPTURING':
-      return OVERLAY_COLORS.green
-    case 'POSSIBLE_INGREDIENT':
-      return OVERLAY_COLORS.yellow
-    default:
-      return OVERLAY_COLORS.red
+  // Once we've locked onto a stable detection, hold solid green — we've
+  // already committed to a capture, so the colour shouldn't waver.
+  if (state === 'CONFIRMED' || state === 'CAPTURING') {
+    return OVERLAY_COLORS.green
   }
+
+  // Otherwise interpolate red -> yellow -> green continuously as confidence
+  // climbs, so the frame visibly eases toward green rather than jumping
+  // between three fixed bands.
+  const t = Math.max(0, Math.min(1, confidence))
+  return t <= 0.5
+    ? lerpColor(OVERLAY_COLORS.red, OVERLAY_COLORS.yellow, t / 0.5)
+    : lerpColor(OVERLAY_COLORS.yellow, OVERLAY_COLORS.green, (t - 0.5) / 0.5)
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────

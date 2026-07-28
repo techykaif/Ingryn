@@ -4,6 +4,7 @@ import { CameraView } from 'expo-camera'
 import * as ImagePicker from 'expo-image-picker'
 import { saveAnalysis } from './useIngredientAnalysis'
 import { useDietaryPreferences } from './useDietaryPreferences'
+import { filterTextToGuideBox } from '@/detection/textRegionFilter'
 
 export const IS_WEB = Platform.OS === 'web'
 
@@ -115,7 +116,10 @@ export function useScanner(userId: string, onSuccess: (scanId: string) => void) 
     onSuccess(scanId)
   }, [userId, preferences, clearProcessingTimeout, startTipCycle, stopTipCycle, onSuccess])
 
-  const recognizeFromUri = useCallback(async (uri: string) => {
+  const recognizeFromUri = useCallback(async (
+    uri: string,
+    guideBox?: { photoWidth?: number; photoHeight?: number }
+  ) => {
     if (IS_WEB) {
       stopTipCycle()
       setStep('manual')
@@ -126,7 +130,12 @@ export function useScanner(userId: string, onSuccess: (scanId: string) => void) 
     try {
       const TextRecognition = (await import('@react-native-ml-kit/text-recognition')).default
       const result = await TextRecognition.recognize(uri)
-      const text = result.text?.trim() || ''
+      const rawText = result.text?.trim() || ''
+      // Only camera captures pass a guideBox — gallery picks have no on-screen
+      // box to confine to, so they always use the full recognized text.
+      const text = guideBox
+        ? filterTextToGuideBox(result.blocks, rawText, guideBox.photoWidth, guideBox.photoHeight).trim()
+        : rawText
 
       if (!text || text.length < 10) {
         stopTipCycle()
@@ -163,7 +172,7 @@ export function useScanner(userId: string, onSuccess: (scanId: string) => void) 
 
       setStep('processing')
       startTipCycle()
-      await recognizeFromUri(photo.uri)
+      await recognizeFromUri(photo.uri, { photoWidth: photo.width, photoHeight: photo.height })
     } catch (e: any) {
       stopTipCycle()
       setStep('camera')

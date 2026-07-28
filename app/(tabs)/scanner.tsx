@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useScanner, IS_WEB } from '@/hooks/useScanner'
 import { useRealtimeDetection } from '@/hooks/useRealtimeDetection'
 import { CameraOverlay } from '@/components/CameraOverlay'
+import { GUIDE_WIDTH_RATIO, GUIDE_HEIGHT_RATIO } from '@/detection/textRegionFilter'
 import { Colors, Fonts, FontSizes, Spacing, Radius, Shadows } from '@/constants/theme'
 import type { DetectionState } from '@/detection/CameraStateMachine'
 import type { DetectionClassification } from '@/detection/DetectionEngine'
@@ -22,8 +23,8 @@ import {
   Scan, ArrowLeft, Camera, Warning, X
 } from 'phosphor-react-native'
 
-const FRAME_W = 0.86
-const FRAME_H = 0.26
+const FRAME_W = GUIDE_WIDTH_RATIO
+const FRAME_H = GUIDE_HEIGHT_RATIO
 
 export default function ScannerScreen() {
   const router = useRouter()
@@ -53,9 +54,10 @@ export default function ScannerScreen() {
   } = useScanner(user?.id || '', (scanId) => router.push(`/results/${scanId}`))
 
   // ── Real-time detection ──
-  const handleAutoCapture = useCallback((uri: string) => {
-    // Feed the auto-captured photo into the existing OCR → manual-review pipeline
-    recognizeFromUri(uri)
+  const handleAutoCapture = useCallback((uri: string, width?: number, height?: number) => {
+    // Feed the auto-captured photo into the existing OCR → manual-review pipeline,
+    // confined to the guide box so text outside it doesn't leak into the result.
+    recognizeFromUri(uri, { photoWidth: width, photoHeight: height })
   }, [recognizeFromUri])
 
   const {
@@ -324,7 +326,8 @@ function CameraScreen({
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
           facing="back"
-          flash={flash ? 'on' : 'off'}
+          flash="off"
+          enableTorch={flash}
           onCameraReady={onCameraReady}
         />
       )}
