@@ -65,7 +65,9 @@ async function processUnknownIngredientsInBackground(
   preferences?: DietaryPreferences
 ) {
   try {
-    const chunkSize = 5 // Process 5 ingredients at a time
+    // The Edge Function caps a single AI request at 25 unknown ingredients.
+    // Keep a small safety margin while cutting Gemini request count.
+    const chunkSize = 20
     for (let i = 0; i < unknownNames.length; i += chunkSize) {
       const chunk = unknownNames.slice(i, i + chunkSize)
       try {
