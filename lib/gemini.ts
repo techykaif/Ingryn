@@ -3,6 +3,7 @@ import { FunctionsHttpError } from '@supabase/supabase-js'
 import type { DietaryPreferences } from '@/store'
 
 export type IngredientAnalysis = {
+  id?: string
   name: string
   aliases: string[]
   category: string
