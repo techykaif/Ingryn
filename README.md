@@ -2,7 +2,7 @@
 
 > AI-powered ingredient intelligence for the products you buy.
 
-INGRYN is a React Native / Expo mobile application that turns an ingredient label into a structured, easy-to-understand analysis. Users can scan a label with the camera, pick an image from the gallery, or enter text manually. OCR extracts the label, the user can review and edit it, and INGRYN combines cached ingredient data with server-side Gemini analysis to explain what is in the product and how it relates to the user's preferences.
+INGRYN is a React Native / Expo mobile application that turns an ingredient label into a structured, easy-to-understand analysis. Users scan a label with the camera or pick a label photo from the gallery. OCR extracts the label and sends it directly into the durable server analysis pipeline, where INGRYN combines cached ingredient data with server-side Gemini analysis to explain what is in the product and how it relates to the user's preferences.
 
 **Status:** Active development  
 **Platform:** iOS + Android  
@@ -18,11 +18,10 @@ INGRYN is a React Native / Expo mobile application that turns an ingredient labe
 
 - Live camera scanning
 - Gallery/image fallback
-- Manual text entry
 - ML Kit OCR
-- OCR review and editing before analysis
+- Direct OCR → analysis flow with no manual review screen
 - Automatic real-time ingredient-list detection through **RTIDS**
-- Manual capture remains available as a fallback
+- Tap-to-capture remains available as a fallback
 
 ### 🧠 AI ingredient analysis
 
@@ -83,17 +82,13 @@ Frame Detection
      ↓
 DetectionEngine
      ↓
-Confidence Evaluation
-     ↓
-Visual Guide / Overlay
-     ↓
 Stable Detection
      ↓
 Auto Capture
      ↓
-OCR + Review
+OCR
      ↓
-AI Analysis
+Durable AI Analysis
 ```
 
 RTIDS is built around application-level detection logic including a custom `DetectionEngine`, camera state management, confidence scoring, and fuzzy matching. It feeds into the same OCR/review pipeline used by manual capture, so the automatic path does not create a separate analysis architecture.
@@ -271,7 +266,7 @@ AI Analysis
      ↓
 Personalization
      ↓
-Smart / Real-Time Scanning
+Instant / Real-Time Scanning
      ↓
 Abuse Protection Instrumentation
      ↓

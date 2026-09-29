@@ -121,11 +121,11 @@ Personalized Results
 
 - Camera permission handling.
 - Live camera preview.
-- Manual capture.
+- Automatic ingredient-list detection and capture.
+- Tap-to-capture fallback.
 - Gallery selection.
-- Manual text entry fallback.
 - OCR extraction.
-- OCR review/edit before analysis.
+- Direct OCR-to-analysis flow without an editable review screen.
 - Reset/retry flow.
 - Lifecycle-safe scanner state handling.
 
@@ -144,16 +144,18 @@ DetectionEngine
     ↓
 Confidence evaluation
     ↓
-Guide/overlay feedback
+Subtle camera feedback
     ↓
 Stable detection
     ↓
 Auto capture
     ↓
-Existing OCR + review pipeline
+OCR
+    ↓
+Durable analysis pipeline
 ```
 
-Manual capture, gallery selection, and manual entry remain available.
+Automatic capture is the primary path, with tap-to-capture and gallery selection available as fallbacks.
 
 ### AI Analysis
 
