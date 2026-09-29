@@ -39,3 +39,18 @@ describe('Gemini ingredient grounding', () => {
     ])
   })
 })
+
+
+import { parseIngredientNames } from '@/hooks/useIngredientAnalysis'
+
+describe('App ingredient parsing', () => {
+  test('preserves commas inside parenthetical qualifiers and removes duplicates', () => {
+    expect(parseIngredientNames(
+      'WATER, CALCIUM CASEINATE (MILK, SUGAR AND LESS THAN 2% OF SODIUM CASEINATE, POTASSIUM CITRATE), SOY LECITHIN, water'
+    )).toEqual([
+      'water',
+      'calcium caseinate (milk, sugar and less than 2% of sodium caseinate, potassium citrate)',
+      'soy lecithin',
+    ])
+  })
+})
