@@ -226,6 +226,8 @@ export function useScanner(
     requestIdRef.current += 1
     processingReturnStepRef.current = 'manual'
     setScanError(null)
+    setCameraActive(false)
+    setCameraReady(false)
     setStep('manual')
   }, [clearProcessingTimeout, stopTipCycle])
 
