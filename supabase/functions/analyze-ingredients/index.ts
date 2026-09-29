@@ -12,14 +12,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 }
 
-type UserPreferences = {
-  conditions: string[]
-  allergies: string[]
-  diet_type: string
-}
-
-const COUNTRY_STATUS_VALUES = ["permitted", "permitted_with_limits", "banned", "under_review", "no_data"]
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders })
@@ -55,9 +47,8 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
     }
 
-    const { ingredientText, preferences } = (await req.json()) as {
+    const { ingredientText } = (await req.json()) as {
       ingredientText?: string
-      preferences?: UserPreferences
     }
 
     if (!ingredientText || typeof ingredientText !== "string") {
@@ -86,62 +77,73 @@ Deno.serve(async (req: Request) => {
       .trim()
 
     // Keep the model grounded to the exact ingredient text supplied by the
-    // scanner. The model may explain an ingredient, but it must not invent
-    // component ingredients (for example "sodium" from "sodium citrate").
+    // scanner. Parenthetical qualifiers remain part of the same ingredient.
     const sourceIngredients = splitTopLevelIngredients(cleanedInput)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 1)
 
-    const ALLOWED_CONDITIONS = ["diabetes", "hypertension", "celiac", "kidney_disease", "heart_disease", "pregnancy", "ibs", "liver_disease"]
-    const ALLOWED_ALLERGIES = ["gluten", "dairy", "nuts", "peanuts", "soy", "eggs", "shellfish", "fish", "sulphites", "sesame"]
-    const ALLOWED_DIET_TYPES = ["none", "vegan", "vegetarian", "keto", "paleo", "halal", "kosher"]
-
-    let safeConditions: string[] = []
-    let safeAllergies: string[] = []
-    let safeDietType = "none"
-
-    if (preferences) {
-      if (Array.isArray(preferences.conditions)) {
-        safeConditions = preferences.conditions.filter(c => ALLOWED_CONDITIONS.includes(c))
-      }
-      if (Array.isArray(preferences.allergies)) {
-        safeAllergies = preferences.allergies.filter(a => ALLOWED_ALLERGIES.includes(a))
-      }
-      if (preferences.diet_type && ALLOWED_DIET_TYPES.includes(preferences.diet_type)) {
-        safeDietType = preferences.diet_type
-      }
+    // The server owns the global ingredient cache. This prevents a user from
+    // burning Gemini quota on ingredients that INGRYN already knows.
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
+    if (!serviceRoleKey) {
+      throw new Error("Server configuration error: missing service role key")
     }
 
-    const preferencesContext =
-      (safeConditions.length > 0 || safeAllergies.length > 0 || safeDietType !== "none")
-        ? `
-User health context (flag ingredients relevant to these):
-- Health conditions: ${safeConditions.length > 0 ? safeConditions.join(", ") : "none"}
-- Allergies: ${safeAllergies.length > 0 ? safeAllergies.join(", ") : "none"}
-- Diet type: ${safeDietType !== "none" ? safeDietType : "no specific diet"}
-`
-        : ""
+    const admin = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      serviceRoleKey,
+    )
+
+    const cacheRows = await findCachedIngredients(admin, sourceIngredients)
+    const unknownIngredients = sourceIngredients.filter(
+      (item) => !cacheRows.has(normalizeCacheKey(item)),
+    )
+
+    if (unknownIngredients.length === 0) {
+      return new Response(JSON.stringify([]), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      })
+    }
+
+    if (unknownIngredients.length > 25) {
+      return new Response(
+        JSON.stringify({
+          error: "Too many unknown ingredients in one request.",
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      )
+    }
 
     const prompt = `You are an ingredient safety expert and food scientist. Analyze these product ingredients and return a JSON array. Return ONLY valid JSON — no preamble, no markdown, no backticks, no explanations. Your response must start with [ and end with ].
-${preferencesContext}
+
+This is a shared global ingredient cache. Do not personalize the output to any specific user. Do not generate country-specific regulatory status. Do not generate personal flags.
+
 For each ingredient provide:
-- name: string — MUST refer to one complete ingredient from the supplied input. Do not split compounds into component words. For example, if the input contains "sodium citrate", return "sodium citrate", never "sodium". If the input contains "soy lecithin", return "soy lecithin", never "soy".
+- name: string — MUST refer to one complete ingredient from the supplied input. Never split a compound into component words.
 - aliases: string[] (E-numbers, alternative names)
-- category: string (e.g. "Preservative", "Artificial Colour", "Sweetener")
+- category: string
 - description: string (2-3 sentences)
 - safety_level: "safe" | "caution" | "harmful" | "unknown"
 - health_concerns: string[] (empty array if none)
-- country_status: object with keys: US, EU, UK, India, Australia, Canada, Japan, China
-  Values must be one of: "permitted", "permitted_with_limits", "banned", "under_review", "no_data"
-- personal_flag: string | null (only if this ingredient is relevant to the user's health conditions or allergies — explain why briefly, otherwise null)
 
 Ingredients to analyze (these are the only ingredients you may analyze):
-${sourceIngredients.map((item, index) => `${index + 1}. ${item}`).join("\n")}
+${unknownIngredients.map((item, index) => `${index + 1}. ${item}`).join("\\n")}
 
-Do not add ingredients that are not explicitly represented by one of the items above. Return one result per analyzable input item.`
+Do not add ingredients that are not explicitly represented above. Return one result per analyzable input item.`
 
     const parsed = await callGemini(prompt)
-    const grounded = filterAnalysisToSource(parsed, sourceIngredients)
+    const grounded = filterAnalysisToSource(parsed, unknownIngredients)
 
-    return new Response(JSON.stringify(grounded), {
+    const cached = await persistNewIngredients(
+      admin,
+      grounded,
+      unknownIngredients,
+    )
+
+    return new Response(JSON.stringify(cached), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     })
   } catch (e) {
@@ -152,6 +154,110 @@ Do not add ingredients that are not explicitly represented by one of the items a
     })
   }
 })
+
+type CachedIngredient = {
+  id: string
+  name: string
+}
+
+function normalizeCacheKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\\s+/g, " ")
+    .trim()
+}
+
+async function findCachedIngredients(
+  admin: ReturnType<typeof createClient>,
+  sourceIngredients: string[],
+): Promise<Map<string, CachedIngredient>> {
+  const names = sourceIngredients.map(normalizeCacheKey)
+
+  const { data, error } = await admin
+    .from("ingredients")
+    .select("id, name")
+    .in("name", names)
+
+  if (error) throw error
+
+  return new Map(
+    (data ?? []).map((row) => [
+      normalizeCacheKey(row.name),
+      row as CachedIngredient,
+    ]),
+  )
+}
+
+async function persistNewIngredients(
+  admin: ReturnType<typeof createClient>,
+  analysis: unknown[],
+  sourceIngredients: string[],
+): Promise<unknown[]> {
+  if (analysis.length === 0) {
+    return []
+  }
+
+  const allowedSources = new Set(
+    sourceIngredients.map(normalizeCacheKey),
+  )
+
+  const records = analysis
+    .filter((item) => item && typeof item === "object")
+    .map((item) => item as Record<string, unknown>)
+    .filter((item) =>
+      typeof item.name === "string" &&
+      allowedSources.has(normalizeCacheKey(item.name))
+    )
+    .map((item) => ({
+      name: normalizeCacheKey(String(item.name)),
+      aliases: Array.isArray(item.aliases)
+        ? item.aliases.filter((value): value is string => typeof value === "string").slice(0, 20).map((value) => value.slice(0, 200))
+        : [],
+      category: typeof item.category === "string" ? item.category.slice(0, 120) : "Unknown",
+      description: typeof item.description === "string" ? item.description.slice(0, 2000) : "",
+      safety_level:
+        item.safety_level === "safe" ||
+        item.safety_level === "caution" ||
+        item.safety_level === "harmful" ||
+        item.safety_level === "unknown"
+          ? item.safety_level
+          : "unknown",
+      health_concerns: Array.isArray(item.health_concerns)
+        ? item.health_concerns.filter((value): value is string => typeof value === "string").slice(0, 20).map((value) => value.slice(0, 300))
+        : [],
+    }))
+
+  if (records.length === 0) {
+    return []
+  }
+
+  const uniqueRecords = Array.from(
+    new Map(records.map((record) => [record.name, record])).values(),
+  )
+
+  const { error: insertError } = await admin
+    .from("ingredients")
+    .insert(uniqueRecords)
+
+  if (
+    insertError &&
+    insertError.code !== "23505"
+  ) {
+    throw insertError
+  }
+
+  const byName = await findCachedIngredients(
+    admin,
+    uniqueRecords.map((record) => record.name),
+  )
+
+  return uniqueRecords
+    .map((record) => {
+      const id = byName.get(normalizeCacheKey(record.name))?.id
+      return id ? { ...record, id } : null
+    })
+    .filter(Boolean)
+}
 
 async function callGemini(prompt: string, retryCount = 0): Promise<unknown[]> {
   let response: Response
@@ -180,23 +286,8 @@ async function callGemini(prompt: string, retryCount = 0): Promise<unknown[]> {
                 description: { type: "STRING" },
                 safety_level: { type: "STRING", enum: ["safe", "caution", "harmful", "unknown"] },
                 health_concerns: { type: "ARRAY", items: { type: "STRING" } },
-                country_status: {
-                  type: "OBJECT",
-                  properties: {
-                    US: { type: "STRING", enum: COUNTRY_STATUS_VALUES },
-                    EU: { type: "STRING", enum: COUNTRY_STATUS_VALUES },
-                    UK: { type: "STRING", enum: COUNTRY_STATUS_VALUES },
-                    India: { type: "STRING", enum: COUNTRY_STATUS_VALUES },
-                    Australia: { type: "STRING", enum: COUNTRY_STATUS_VALUES },
-                    Canada: { type: "STRING", enum: COUNTRY_STATUS_VALUES },
-                    Japan: { type: "STRING", enum: COUNTRY_STATUS_VALUES },
-                    China: { type: "STRING", enum: COUNTRY_STATUS_VALUES },
-                  },
-                  required: ["US", "EU", "UK", "India", "Australia", "Canada", "Japan", "China"],
-                },
-                personal_flag: { type: "STRING", nullable: true },
               },
-              required: ["name", "aliases", "category", "description", "safety_level", "health_concerns", "country_status"],
+              required: ["name", "aliases", "category", "description", "safety_level", "health_concerns"],
             },
           },
         },
