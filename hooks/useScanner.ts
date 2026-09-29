@@ -8,7 +8,7 @@ import { filterTextToGuideBox } from '@/detection/textRegionFilter'
 
 export const IS_WEB = Platform.OS === 'web'
 
-export type ScanStep = 'camera' | 'processing'
+export type ScanStep = 'camera' | 'processing' | 'manual'
 export type ScanError = { message: string } | null
 
 const PROCESSING_TIPS = [
@@ -32,11 +32,13 @@ export function useScanner(
   const [cameraActive, setCameraActive] = useState(false)
   const [cameraReady, setCameraReady] = useState(false)
   const [processingTip, setProcessingTip] = useState(0)
+  const [manualText, setManualText] = useState('')
   const [scanError, setScanError] = useState<ScanError>(null)
   const cameraRef = useRef<CameraView>(null)
   const tipInterval = useRef<ReturnType<typeof setInterval> | null>(null)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const requestIdRef = useRef(0)
+  const processingReturnStepRef = useRef<ScanStep>('camera')
 
   const startTipCycle = useCallback(() => {
     if (tipInterval.current) clearInterval(tipInterval.current)
@@ -90,6 +92,7 @@ export function useScanner(
 
     setScanError(null)
     setStep('processing')
+    processingReturnStepRef.current = processingReturnStepRef.current === 'manual' ? 'manual' : 'camera'
     startTipCycle()
     requestIdRef.current += 1
     const requestId = requestIdRef.current
@@ -100,7 +103,7 @@ export function useScanner(
       requestIdRef.current += 1
       stopTipCycle()
       clearProcessingTimeout()
-      setStep('camera')
+      setStep(processingReturnStepRef.current)
       setScanError({ message: 'The analysis took too long. Please try again.' })
     }, PROCESSING_TIMEOUT_MS)
 
@@ -112,11 +115,12 @@ export function useScanner(
     stopTipCycle()
 
     if (error || !scanId) {
-      setStep('camera')
+      setStep(processingReturnStepRef.current)
       setScanError({ message: error || 'Could not analyse ingredients. Please try again.' })
       return
     }
 
+    setManualText('')
     setScanError(null)
     setStep('camera')
     onSuccess(scanId)
@@ -216,6 +220,29 @@ export function useScanner(
     }
   }, [stopTipCycle, recognizeFromUri])
 
+  const openManualEntry = useCallback(() => {
+    stopTipCycle()
+    clearProcessingTimeout()
+    requestIdRef.current += 1
+    processingReturnStepRef.current = 'manual'
+    setScanError(null)
+    setCameraActive(false)
+    setCameraReady(false)
+    setStep('manual')
+  }, [clearProcessingTimeout, stopTipCycle])
+
+  const handleManualSubmit = useCallback(async () => {
+    const text = manualText.trim()
+
+    if (!text || text.length < 3) {
+      setScanError({ message: 'Please enter at least one ingredient.' })
+      return
+    }
+
+    processingReturnStepRef.current = 'manual'
+    await processText(text)
+  }, [manualText, processText])
+
   const clearError = useCallback(() => setScanError(null), [])
 
   const cancelProcessing = useCallback(() => {
@@ -243,7 +270,11 @@ export function useScanner(
     deactivateCamera,
     handleCapture,
     handleGalleryPick,
+    openManualEntry,
+    handleManualSubmit,
     cancelProcessing,
     recognizeFromUri,
+    manualText,
+    setManualText,
   }
 }
