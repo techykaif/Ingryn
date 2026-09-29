@@ -412,3 +412,10 @@ enabled = true
 # declarative_schema_path = "./database"
 # JSON string passed through to pg-delta SQL formatting.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":80,\"commaStyle\":\"trailing\"}"
+
+
+# process-scan-analysis is invoked only by the database worker/cron.
+# It authenticates using the Vault-backed x-scan-worker-token instead of a
+# user JWT, so the platform JWT gate must remain disabled for this function.
+[functions.process-scan-analysis]
+verify_jwt = false
