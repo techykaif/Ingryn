@@ -62,6 +62,43 @@ const COMMA_LIST_REGEX = /\w+\s*,\s*\w+/g
 const INGREDIENT_HIGH_THRESHOLD = 0.85
 const INGREDIENT_LOW_THRESHOLD = 0.50
 const NUTRITION_THRESHOLD = 0.45
+
+/**
+ * Nutrient names such as "sodium", "calcium", and "vitamin" are also common
+ * inside legitimate ingredient lists. These terms alone must not turn an
+ * ingredient list into a Nutrition Facts classification.
+ *
+ * Strong nutrition signals are section headers, serving context, daily-value
+ * labels, calories, or explicit macro labels.
+ */
+const STRONG_NUTRITION_KEYWORDS = [
+  'nutrition facts',
+  'nutritional information',
+  'nutrition information',
+  'nutritional values',
+  'supplement facts',
+  'calories',
+  'serving size',
+  'servings per container',
+  'amount per serving',
+  'daily value',
+  '% daily value',
+  'percent daily value',
+  'total fat',
+  'saturated fat',
+  'trans fat',
+  'cholesterol',
+  'total carbohydrate',
+  'dietary fiber',
+  'dietary fibre',
+  'total sugars',
+  'added sugars',
+  'per 100g',
+  'per 100ml',
+  'per serving',
+  'kcal',
+  'kj',
+]
 const BARCODE_MATCH_COUNT = 1
 
 // ── Weights ───────────────────────────────────────────────────────────────────
@@ -108,8 +145,32 @@ export class DetectionEngine {
     const quality = evaluateTextQuality(text)
     const density = textDensityScore(text)
 
-    // ── Step 4: If nutrition score is high, classify as NUTRITION ──
-    if (nutritionScore >= NUTRITION_THRESHOLD && nutritionScore > keywordScore) {
+    // ── Step 4: Calculate ingredient confidence before nutrition classification ──
+    // This is important because nutrition terms also occur inside ingredient
+    // names (e.g. sodium citrate, calcium phosphate, vitamin A palmitate).
+    const confidence =
+      keywordScore * W_KEYWORD +
+      ingredientMatchScore * W_INGREDIENT_MATCH +
+      quality.score * W_QUALITY +
+      density * W_DENSITY
+
+    const hasIngredientHeader =
+      /(?:^|\\b)(?:ingredients?|composition|active ingredients|inactive ingredients|other ingredients)\\s*:/i.test(text)
+
+    const hasStrongNutritionSignal = this.hasStrongNutritionSignal(lower)
+
+    // ── Step 5: Nutrition classification ──
+    // A generic nutrient-word count is not enough. An ingredient list with
+    // "sodium", "calcium", "magnesium", "vitamin", etc. can otherwise score
+    // 100% as nutrition and remain red forever.
+    //
+    // If an explicit ingredient header is present, require a strong nutrition
+    // signal before allowing nutrition classification.
+    if (
+      nutritionScore >= NUTRITION_THRESHOLD &&
+      nutritionScore > confidence &&
+      (!hasIngredientHeader || hasStrongNutritionSignal)
+    ) {
       return this.buildResult(
         'NUTRITION',
         keywordScore,
@@ -120,8 +181,52 @@ export class DetectionEngine {
       )
     }
 
-    // ── Step 5: Calculate ingredient confidence ──
-    const confidence =
+    // ── Step 6: Quality gate ──
+    if (!quality.isAcceptable) {
+      return this.buildResult(
+        'UNKNOWN',
+        confidence,
+        nutritionScore,
+        0,
+        quality.issues,
+        quality.issues[0] || 'Improve image quality.'
+      )
+    }
+
+    // ── Step 7: Classify ──
+    if (confidence >= INGREDIENT_HIGH_THRESHOLD) {
+      return this.buildResult(
+        'INGREDIENTS',
+        confidence,
+        nutritionScore,
+        0,
+        [],
+        'Ingredient list detected!'
+      )
+
+    if (confidence >= INGREDIENT_LOW_THRESHOLD) {
+      return this.buildResult(
+        'UNKNOWN',
+        confidence,
+        nutritionScore,
+        0,
+        [],
+        'Possible ingredient list. Hold steady...'
+      )
+
+    // ── Fallback ──
+    let guidance = 'Point at ingredient list'
+    if (nutritionScore > 0.2) {
+      guidance = 'This looks like the Nutrition Facts table. Please scan the Ingredients section.'
+    }
+    if (quality.issues.length > 0) {
+      guidance = quality.issues[0]
+    }
+
+    return this.buildResult('UNKNOWN', confidence, nutritionScore, 0, quality.issues, guidance)
+  }
+
+  // ─── Scoring functions ──────────────────────────────────────────────────────
       keywordScore * W_KEYWORD +
       ingredientMatchScore * W_INGREDIENT_MATCH +
       quality.score * W_QUALITY +
@@ -230,6 +335,11 @@ export class DetectionEngine {
     if (totalMatches >= 3) return Math.min(ratio + 0.1, 1)
 
     return Math.min(ratio, 1)
+  }
+
+  /** Whether OCR contains a nutrition-table-specific signal. */
+  private hasStrongNutritionSignal(lower: string): boolean {
+    return STRONG_NUTRITION_KEYWORDS.some(keyword => lower.includes(keyword))
   }
 
   /** Score presence of nutrition-related keywords (0–1). */
