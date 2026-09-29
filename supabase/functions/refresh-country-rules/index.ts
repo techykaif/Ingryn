@@ -126,6 +126,23 @@ Deno.serve(async (req: Request) => {
       throw sourceError
     }
 
+    const { data: unverifiedRows, error: unverifiedError } = await admin
+      .from("ingredient_country_rules")
+      .select("country_code, ingredient_id")
+      .is("verified_at", null)
+
+    if (unverifiedError) {
+      throw unverifiedError
+    }
+
+    const unverifiedByCountry = new Map<string, string[]>()
+
+    for (const row of unverifiedRows ?? []) {
+      const current = unverifiedByCountry.get(row.country_code) ?? []
+      current.push(row.ingredient_id)
+      unverifiedByCountry.set(row.country_code, current)
+    }
+
     const now = Date.now()
     const staleSources = (sources ?? []).filter((item) => {
       if (requestedCountry && item.country_code !== requestedCountry) {
@@ -139,7 +156,10 @@ Deno.serve(async (req: Request) => {
         return false
       }
 
-      if (!item.last_checked_at) {
+      const hasUnverifiedRules =
+        (unverifiedByCountry.get(item.country_code)?.length ?? 0) > 0
+
+      if (!item.last_checked_at || hasUnverifiedRules) {
         return true
       }
 
@@ -166,6 +186,178 @@ Deno.serve(async (req: Request) => {
       const sourceHash = await sha256(fetched.bytes)
 
       if (source.last_content_hash === sourceHash) {
+        const unverifiedIds =
+          unverifiedByCountry.get(source.country_code) ?? []
+
+        if (unverifiedIds.length === 0) {
+          await admin
+            .from("country_rule_sources")
+            .update({
+              last_checked_at: new Date().toISOString(),
+              last_success_at: new Date().toISOString(),
+              last_error: null,
+              next_attempt_at: null,
+            })
+            .eq("country_code", source.country_code)
+            .throwOnError()
+
+          await admin
+            .from("ingredient_country_rules")
+            .update({
+              verified_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("country_code", source.country_code)
+            .throwOnError()
+
+          await finishRun(admin, runId, {
+            status: "unchanged",
+            sourceHash,
+            metadata: {
+              sourceChanged: false,
+              sourceName: source.source_name,
+              verifiedExistingRules: true,
+            },
+          })
+
+          return json({
+            status: "unchanged",
+            country_code: source.country_code,
+          })
+        }
+
+        const { data: unverifiedIngredients, error: unverifiedIngredientError } =
+          await admin
+            .from("ingredients")
+            .select("id, name, aliases")
+            .in("id", unverifiedIds)
+
+        if (unverifiedIngredientError) {
+          throw unverifiedIngredientError
+        }
+
+        const { data: unverifiedCurrentRules, error: unverifiedRuleError } =
+          await admin
+            .from("ingredient_country_rules")
+            .select("ingredient_id, status, raw_status")
+            .eq("country_code", source.country_code)
+            .in("ingredient_id", unverifiedIds)
+
+        if (unverifiedRuleError) {
+          throw unverifiedRuleError
+        }
+
+        const currentRuleMap = new Map(
+          (unverifiedCurrentRules ?? []).map((rule) => [
+            rule.ingredient_id,
+            {
+              status: rule.status,
+              raw_status: rule.raw_status,
+            },
+          ]),
+        )
+
+        const unverifiedExisting: ExistingRule[] =
+          (unverifiedIngredients ?? []).map((ingredient) => ({
+            ingredient_id: ingredient.id,
+            name: ingredient.name,
+            aliases: ingredient.aliases,
+            status:
+              currentRuleMap.get(ingredient.id)?.status ?? "no_data",
+            raw_status:
+              currentRuleMap.get(ingredient.id)?.raw_status ?? null,
+          }))
+
+        const parsed = await analyzeWithGemini(
+          source,
+          unverifiedExisting,
+        )
+
+        validateChanges(
+          parsed.changes,
+          source,
+          new Map(
+            unverifiedExisting.map((item) => [
+              item.ingredient_id,
+              item,
+            ]),
+          ),
+        )
+
+        if (parsed.changes.length > MAX_AUTOMATED_CHANGES) {
+          throw new Error(
+            "Automated refresh produced too many changes (" +
+              parsed.changes.length +
+              "). Leaving published rules unchanged.",
+          )
+        }
+
+        if (parsed.changes.length > 0) {
+          const verification =
+            await verifyProposedChangesWithGemini(
+              source,
+              unverifiedExisting,
+              parsed.changes,
+            )
+
+          validateVerification(
+            verification,
+            parsed.changes,
+            source,
+          )
+        }
+
+        const publishedVersionId =
+          await latestPublishedVersionId(
+            admin,
+            source.country_code,
+          )
+
+        if (!publishedVersionId) {
+          throw new Error(
+            "Country source is unchanged but has no published rule version.",
+          )
+        }
+
+        for (const change of parsed.changes) {
+          await admin
+            .from("ingredient_country_rules")
+            .upsert(
+              {
+                ingredient_id: change.ingredient_id,
+                country_code: source.country_code,
+                status: change.status,
+                raw_status:
+                  change.status === "other"
+                    ? change.raw_status ?? null
+                    : null,
+                source_version_id: publishedVersionId,
+                evidence: change.evidence,
+                effective_from: validDate(change.effective_from)
+                  ? change.effective_from
+                  : null,
+                effective_until: validDate(change.effective_until)
+                  ? change.effective_until
+                  : null,
+                verified_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "ingredient_id,country_code" },
+            )
+            .throwOnError()
+        }
+
+        await admin
+          .from("ingredient_country_rules")
+          .update({
+            source_version_id: publishedVersionId,
+            verified_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("country_code", source.country_code)
+          .in("ingredient_id", unverifiedIds)
+          .throwOnError()
+
         await admin
           .from("country_rule_sources")
           .update({
@@ -177,28 +369,29 @@ Deno.serve(async (req: Request) => {
           .eq("country_code", source.country_code)
           .throwOnError()
 
-        await admin
-          .from("ingredient_country_rules")
-          .update({
-            verified_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("country_code", source.country_code)
-          .throwOnError()
-
         await finishRun(admin, runId, {
-          status: "unchanged",
+          status: "published",
           sourceHash,
+          sourceVersionId: publishedVersionId,
+          ingredientsChecked: unverifiedExisting.length,
+          ingredientsChanged: parsed.changes.length,
+          citationsChecked: parsed.changes.length,
+          citationsValid: parsed.changes.length,
           metadata: {
-            sourceChanged: false,
             sourceName: source.source_name,
-            verifiedExistingRules: true,
+            sourceUrl: source.source_url,
+            grounded: true,
+            sourceChanged: false,
+            newlyVerifiedIngredients: unverifiedIds.length,
           },
         })
 
         return json({
-          status: "unchanged",
+          status: "published",
           country_code: source.country_code,
+          changed_ingredients: parsed.changes.length,
+          verified_ingredients: unverifiedIds.length,
+          version: "existing",
         })
       }
 
@@ -1021,6 +1214,25 @@ async function sha256(bytes: Uint8Array): Promise<string> {
       value.toString(16).padStart(2, "0"),
     )
     .join("")
+}
+
+async function latestPublishedVersionId(
+  admin: ReturnType<typeof createClient>,
+  countryCode: string,
+): Promise<string | null> {
+  const { data, error } = await admin
+    .from("country_rule_versions")
+    .select("id")
+    .eq("country_code", countryCode)
+    .eq("state", "published")
+    .order("version_number", { ascending: false })
+    .limit(1)
+
+  if (error) {
+    throw error
+  }
+
+  return data?.[0]?.id ?? null
 }
 
 async function nextVersionNumber(
