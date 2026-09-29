@@ -79,7 +79,7 @@ export function filterAnalysisToSource(
       if (source.normalized === normalizedName) return true
 
       return source.normalized.startsWith(normalizedName + " ")
-        && source.raw.trim().startsWith(name.trim())
+        && source.raw.trim().toLowerCase().startsWith(name.trim().toLowerCase())
         && source.raw.trim().slice(name.trim().length).startsWith("(")
     })
 
