@@ -226,61 +226,8 @@ export class DetectionEngine {
   }
 
   // ─── Scoring functions ──────────────────────────────────────────────────────
-      keywordScore * W_KEYWORD +
-      ingredientMatchScore * W_INGREDIENT_MATCH +
-      quality.score * W_QUALITY +
-      density * W_DENSITY
 
-    // ── Step 6: Quality gate ──
-    if (!quality.isAcceptable) {
-      return this.buildResult(
-        'UNKNOWN',
-        confidence,
-        nutritionScore,
-        0,
-        quality.issues,
-        quality.issues[0] || 'Improve image quality.'
-      )
-    }
-
-    // ── Step 7: Classify ──
-    if (confidence >= INGREDIENT_HIGH_THRESHOLD) {
-      return this.buildResult(
-        'INGREDIENTS',
-        confidence,
-        nutritionScore,
-        0,
-        [],
-        'Ingredient list detected!'
-      )
-    }
-
-    if (confidence >= INGREDIENT_LOW_THRESHOLD) {
-      return this.buildResult(
-        'UNKNOWN',
-        confidence,
-        nutritionScore,
-        0,
-        [],
-        'Possible ingredient list. Hold steady...'
-      )
-    }
-
-    // ── Fallback ──
-    let guidance = 'Point at ingredient list'
-    if (nutritionScore > 0.2) {
-      guidance = 'This looks like the Nutrition Facts table. Please scan the Ingredients section.'
-    }
-    if (quality.issues.length > 0) {
-      guidance = quality.issues[0]
-    }
-
-    return this.buildResult('UNKNOWN', confidence, nutritionScore, 0, quality.issues, guidance)
-  }
-
-  // ─── Scoring functions ──────────────────────────────────────────────────────
-
-  /** Score presence of ingredient-section keywords (0–1). */
+/** Score presence of ingredient-section keywords (0–1). */
   private scoreIngredientKeywords(lower: string): number {
     let score = 0
     let maxPossible = 0
