@@ -147,14 +147,19 @@ export class DetectionEngine {
 
     // ── Step 4: Calculate ingredient confidence before nutrition classification ──
     // Nutrient names are common inside legitimate ingredient lists.
+    const hasIngredientHeader =
+      /(?:^|\b)(?:ingredients?|composition|active ingredients|inactive ingredients|other ingredients)\s*:/i.test(text)
+
+    // An explicit Ingredients: header is a high-confidence structural signal.
+    // Give it full keyword weight so long compound ingredient names do not
+    // dilute the classification through fuzzy token ratios.
+    const effectiveKeywordScore = hasIngredientHeader ? 1 : keywordScore
+
     const confidence =
-      keywordScore * W_KEYWORD +
+      effectiveKeywordScore * W_KEYWORD +
       ingredientMatchScore * W_INGREDIENT_MATCH +
       quality.score * W_QUALITY +
       density * W_DENSITY
-
-    const hasIngredientHeader =
-      /(?:^|\b)(?:ingredients?|composition|active ingredients|inactive ingredients|other ingredients)\s*:/i.test(text)
 
     const hasStrongNutritionSignal = this.hasStrongNutritionSignal(lower)
 
