@@ -6,18 +6,12 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
-
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -27,32 +21,6 @@ jobs:
 
       - name: Install dependencies
         run: npm install --ignore-scripts
-
-      # Temporary repair step: npm install regenerates the lockfile from the
-      # package manifest. Push only when this PR's lockfile is actually stale.
-      - name: Regenerate package lock
-        if: github.event_name == 'pull_request'
-        run: npm install --package-lock-only --ignore-scripts
-
-      - name: Persist regenerated package lock
-        if: github.event_name == 'pull_request'
-        env:
-          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
-          PR_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-        run: |
-          if git diff --quiet -- package-lock.json; then
-            echo "package-lock.json is already synchronized"
-            exit 0
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git commit -m "chore: sync package lock"
-          git push "https://x-access-token:${{ github.token }}@github.com/${PR_REPOSITORY}.git" "HEAD:${PR_BRANCH}"
-
-      - name: Verify clean npm ci install
-        run: npm ci --include=dev
 
       - name: Run unit tests
         run: npm test
