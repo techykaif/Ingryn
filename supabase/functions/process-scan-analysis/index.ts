@@ -121,6 +121,14 @@ Deno.serve(async (req: Request) => {
 
       if (ingredientNames.length === 0) {
         await syncScanFromCache(admin, scan, initialCache, sourceIngredients)
+        await admin
+          .from("scans")
+          .update({
+            analysis_status: "completed",
+            analysis_error: null,
+            analysis_updated_at: new Date().toISOString(),
+          })
+          .eq("id", scan.id)
         await markJobComplete(admin, job.job_id)
         return json({ processed: true, scanId: scan.id, status: "completed" })
       }
