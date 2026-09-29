@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS public.ai_usage_daily (
   gemini_requests integer NOT NULL DEFAULT 0 CHECK (gemini_requests >= 0),
   gemini_prompt_tokens bigint NOT NULL DEFAULT 0 CHECK (gemini_prompt_tokens >= 0),
   gemini_output_tokens bigint NOT NULL DEFAULT 0 CHECK (gemini_output_tokens >= 0),
+  unknown_ingredients integer NOT NULL DEFAULT 0 CHECK (unknown_ingredients >= 0),
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, usage_date)
 );
@@ -80,3 +81,41 @@ CREATE INDEX IF NOT EXISTS ai_usage_daily_date_idx
   ON public.ai_usage_daily (usage_date);
 
 ALTER TABLE public.ai_usage_daily ENABLE ROW LEVEL SECURITY;
+
+ 
+CREATE OR REPLACE FUNCTION public.record_gemini_usage(
+  p_user_id uuid,
+  p_unknown_ingredient_count integer DEFAULT 0
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $function$
+BEGIN
+  INSERT INTO public.ai_usage_daily (
+    user_id,
+    usage_date,
+    gemini_requests,
+    unknown_ingredients,
+    updated_at
+  )
+  VALUES (
+    p_user_id,
+    (now() AT TIME ZONE 'UTC')::date,
+    1,
+    GREATEST(COALESCE(p_unknown_ingredient_count, 0), 0),
+    now()
+  )
+  ON CONFLICT (user_id, usage_date)
+  DO UPDATE SET
+    gemini_requests = public.ai_usage_daily.gemini_requests + 1,
+    unknown_ingredients =
+      public.ai_usage_daily.unknown_ingredients +
+      GREATEST(COALESCE(EXCLUDED.unknown_ingredients, 0), 0),
+    updated_at = now();
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.record_gemini_usage(uuid, integer) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_gemini_usage(uuid, integer) TO service_role;
