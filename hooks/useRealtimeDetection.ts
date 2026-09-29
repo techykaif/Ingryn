@@ -73,7 +73,8 @@ export function useRealtimeDetection(
    * Receives the camera photo URI plus its pixel dimensions, so the
    * caller can confine the follow-up OCR pass to the guide box too.
    */
-  onAutoCapture: (uri: string, width?: number, height?: number) => void
+  onAutoCapture: (uri: string, width?: number, height?: number) => void,
+  guideViewport: { width: number; height: number }
 ): UseRealtimeDetectionReturn {
   // ── State ──
   const [detectionState, setDetectionState] = useState<DetectionState>('IDLE')
@@ -151,7 +152,8 @@ export function useRealtimeDetection(
         ocrResult.blocks,
         ocrResult.text?.trim() || '',
         photo.width,
-        photo.height
+        photo.height,
+        guideViewport
       ).trim()
 
       if (!isMountedRef.current || !isScanningRef.current) return
@@ -223,7 +225,7 @@ export function useRealtimeDetection(
         FileSystem.deleteAsync(previewUri, { idempotent: true }).catch(() => {})
       }
     }
-  }, [cameraRef, cameraReady, onAutoCapture])
+  }, [cameraRef, cameraReady, onAutoCapture, guideViewport])
 
   // ── Schedule the next frame, adapting cadence to current detection state ──
   const scheduleNextFrame = useCallback(() => {
