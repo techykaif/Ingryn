@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity,
   ActivityIndicator, TextInput, KeyboardAvoidingView,
@@ -31,6 +31,7 @@ export default function ScannerScreen() {
   const { width, height } = useWindowDimensions()
   const frameW = width * FRAME_W
   const frameH = height * FRAME_H
+  const guideViewport = useMemo(() => ({ width, height }), [width, height])
   const { user } = useAuthStore()
   const [permission, requestPermission] = useCameraPermissions()
 
@@ -51,7 +52,11 @@ export default function ScannerScreen() {
     handleManualSubmit,
     cancelProcessing,
     recognizeFromUri,
-  } = useScanner(user?.id || '', (scanId) => router.push(`/results/${scanId}`))
+  } = useScanner(
+    user?.id || '',
+    (scanId) => router.push(`/results/${scanId}`),
+    guideViewport
+  )
 
   // ── Real-time detection ──
   const handleAutoCapture = useCallback((uri: string, width?: number, height?: number) => {
@@ -69,7 +74,12 @@ export default function ScannerScreen() {
     startScanning,
     stopScanning,
     resetDetection,
-  } = useRealtimeDetection(cameraRef, cameraReady, handleAutoCapture)
+  } = useRealtimeDetection(
+    cameraRef,
+    cameraReady,
+    handleAutoCapture,
+    guideViewport
+  )
 
   // Start realtime scanning when camera becomes ready (native only)
   useEffect(() => {
