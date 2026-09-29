@@ -131,12 +131,59 @@ export default function ResultsScreen() {
   useEffect(() => { fetchResults() }, [fetchResults])
 
   useEffect(() => {
-    if (!isProcessing) return
-    const interval = setInterval(() => {
-      fetchResults()
-    }, 3000)
-    return () => clearInterval(interval)
-  }, [isProcessing, fetchResults])
+    if (!isProcessing || !scanId) return
+
+    let disposed = false
+    let fallbackInterval: ReturnType<typeof setInterval> | null = null
+
+    const clearFallback = () => {
+      if (fallbackInterval) {
+        clearInterval(fallbackInterval)
+        fallbackInterval = null
+      }
+    }
+
+    const startFallback = () => {
+      if (fallbackInterval || disposed) return
+      fallbackInterval = setInterval(() => {
+        fetchResults()
+      }, 5000)
+    }
+
+    const channel = supabase
+      .channel(`scan-results-${scanId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'scans',
+          filter: `id=eq.${scanId}`,
+        },
+        () => {
+          if (!disposed) fetchResults()
+        },
+      )
+      .subscribe((status) => {
+        if (disposed) return
+
+        if (status === 'SUBSCRIBED') {
+          clearFallback()
+        } else if (
+          status === 'CHANNEL_ERROR' ||
+          status === 'TIMED_OUT' ||
+          status === 'CLOSED'
+        ) {
+          startFallback()
+        }
+      })
+
+    return () => {
+      disposed = true
+      clearFallback()
+      void supabase.removeChannel(channel)
+    }
+  }, [isProcessing, scanId, fetchResults])
 
   async function saveLabel() {
     if (!labelText.trim()) {
