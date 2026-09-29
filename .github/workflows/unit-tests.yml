@@ -27,3 +27,11 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: latest
+
+      - name: Check scan analysis worker
+        run: deno check supabase/functions/process-scan-analysis/index.ts
