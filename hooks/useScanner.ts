@@ -21,7 +21,11 @@ const PROCESSING_TIPS = [
 
 const PROCESSING_TIMEOUT_MS = 30_000
 
-export function useScanner(userId: string, onSuccess: (scanId: string) => void) {
+export function useScanner(
+  userId: string,
+  onSuccess: (scanId: string) => void,
+  guideViewport: { width: number; height: number }
+) {
   const { preferences } = useDietaryPreferences()
   const [step, setStep] = useState<ScanStep>('camera')
   const [flash, setFlash] = useState(false)
@@ -134,7 +138,13 @@ export function useScanner(userId: string, onSuccess: (scanId: string) => void) 
       // Only camera captures pass a guideBox — gallery picks have no on-screen
       // box to confine to, so they always use the full recognized text.
       const text = guideBox
-        ? filterTextToGuideBox(result.blocks, rawText, guideBox.photoWidth, guideBox.photoHeight).trim()
+        ? filterTextToGuideBox(
+          result.blocks,
+          rawText,
+          guideBox.photoWidth,
+          guideBox.photoHeight,
+          guideViewport
+        ).trim()
         : rawText
 
       if (!text || text.length < 10) {
@@ -156,7 +166,7 @@ export function useScanner(userId: string, onSuccess: (scanId: string) => void) 
       setStep('camera')
       setScanError({ message: e.message || 'Could not read the image.', allowManual: true })
     }
-  }, [stopTipCycle])
+  }, [stopTipCycle, guideViewport])
 
   const handleCapture = useCallback(async () => {
     if (!cameraRef.current || !cameraReady) return
@@ -172,7 +182,10 @@ export function useScanner(userId: string, onSuccess: (scanId: string) => void) 
 
       setStep('processing')
       startTipCycle()
-      await recognizeFromUri(photo.uri, { photoWidth: photo.width, photoHeight: photo.height })
+      await recognizeFromUri(photo.uri, {
+        photoWidth: photo.width,
+        photoHeight: photo.height,
+      })
     } catch (e: any) {
       stopTipCycle()
       setStep('camera')
