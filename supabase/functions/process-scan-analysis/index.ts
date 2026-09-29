@@ -68,7 +68,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { data: typedScan, error: scanError } = await admin
+    const { data: rawScan, error: scanError } = await admin
       .from("scans")
       .select("id, user_id, raw_ocr_text, ingredient_ids")
       .eq("id", job.scan_id)
@@ -76,9 +76,9 @@ Deno.serve(async (req: Request) => {
 
     if (scanError) throw scanError
 
-    const typedScan = scan as ScanRow | null
+    const scan = rawScan as ScanRow | null
 
-    if (!typedScan) {
+    if (!scan) {
       await markJobComplete(admin, job.job_id)
       return json({ processed: true, scanId: job.scan_id, reason: "scan_missing" })
     }
@@ -371,7 +371,7 @@ async function syncScanFromCache(
   admin: ReturnType<typeof createClient>,
   scan: ScanRow,
   cache: Map<string, CachedIngredient>,
-  sourceIngredients: string[],
+  _sourceIngredients: string[],
 ) {
   const ids = mergeIngredientIds(typedScan.ingredient_ids ?? [], cache)
   const score = calculateSafetyScore(
@@ -386,7 +386,7 @@ async function syncScanFromCache(
       safety_score: score,
       analysis_updated_at: new Date().toISOString(),
     })
-    .eq("id", typedScan.id)
+    .eq("id", scan.id)
 
   if (error) throw error
 }
