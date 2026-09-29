@@ -95,7 +95,7 @@ export function parseIngredientNames(text: string): string[] {
 
   return splitIngredientText(text)
     .map(s => s.trim().toLowerCase())
-    .filter(s => s.length > 1 && s.length < 100)
+    .filter(s => s.length > 1 && s.length < 2000)
     .filter(name => {
       if (seen.has(name)) return false
       seen.add(name)
