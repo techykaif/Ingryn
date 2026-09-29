@@ -34,4 +34,4 @@ jobs:
           deno-version: latest
 
       - name: Check scan analysis worker
-        run: deno check supabase/functions/process-scan-analysis/index.ts
+        run: deno check --node-modules-dir=auto supabase/functions/process-scan-analysis/index.ts
