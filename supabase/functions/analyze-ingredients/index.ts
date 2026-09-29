@@ -117,6 +117,49 @@ Deno.serve(async (req: Request) => {
       )
     }
 
+    const billingConfig = await getBillingConfig(admin)
+
+    if (billingConfig.emergency_ai_disabled) {
+      return new Response(
+        JSON.stringify({
+          error: "AI analysis is temporarily unavailable.",
+        }),
+        {
+          status: 503,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      )
+    }
+
+    if (billingConfig.max_gemini_requests_per_day !== null) {
+      const { data: usage, error: usageError } = await admin
+        .from("ai_usage_daily")
+        .select("gemini_requests")
+        .eq("user_id", user.id)
+        .eq("usage_date", new Date().toISOString().slice(0, 10))
+        .maybeSingle()
+
+      if (usageError) throw usageError
+
+      if (
+        (usage?.gemini_requests ?? 0) >=
+        billingConfig.max_gemini_requests_per_day
+      ) {
+        return new Response(
+          JSON.stringify({
+            error: "DAILY_AI_LIMIT_REACHED",
+          }),
+          {
+            status: 429,
+            headers: {
+              ...corsHeaders,
+              "Content-Type": "application/json",
+            },
+          },
+        )
+      }
+    }
+
     const prompt = `You are an ingredient safety expert and food scientist. Analyze these product ingredients and return a JSON array. Return ONLY valid JSON — no preamble, no markdown, no backticks, no explanations. Your response must start with [ and end with ].
 
 This is a shared global ingredient cache. Do not personalize the output to any specific user. Do not generate country-specific regulatory status. Do not generate personal flags.
@@ -172,6 +215,42 @@ async function recordGeminiUsage(
   } catch {
     // Telemetry is intentionally non-blocking.
   }
+}
+
+type BillingConfig = {
+  emergency_ai_disabled: boolean
+  max_gemini_requests_per_day: number | null
+}
+
+let billingConfigCache:
+  | { value: BillingConfig; expiresAt: number }
+  | null = null
+
+async function getBillingConfig(
+  admin: ReturnType<typeof createClient>,
+): Promise<BillingConfig> {
+  const now = Date.now()
+
+  if (billingConfigCache && billingConfigCache.expiresAt > now) {
+    return billingConfigCache.value
+  }
+
+  const { data, error } = await admin
+    .from("billing_config")
+    .select("emergency_ai_disabled, max_gemini_requests_per_day")
+    .eq("singleton", true)
+    .single()
+
+  if (error) throw error
+
+  const value = data as BillingConfig
+
+  billingConfigCache = {
+    value,
+    expiresAt: now + 60_000,
+  }
+
+  return value
 }
 
 type CachedIngredient = {
