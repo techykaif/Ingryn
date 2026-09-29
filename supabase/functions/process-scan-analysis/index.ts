@@ -2,7 +2,6 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "jsr:@supabase/supabase-js@2"
 import {
   SCAN_ANALYSIS_CHUNK_SIZE,
-  MAX_SCAN_ANALYSIS_RETRIES,
   calculateSafetyScore,
   getAnalysisStatus,
   getRetryDelaySeconds,
@@ -142,7 +141,7 @@ Deno.serve(async (req: Request) => {
 
     if (retryStateError) throw retryStateError
 
-    let retryCount = retryState.retry_count
+    const retryCount = retryState.retry_count
     let ingredientNames = job.ingredient_names
     let cursor = job.ingredient_cursor
 
@@ -185,7 +184,7 @@ Deno.serve(async (req: Request) => {
         (name) => !finalCache.has(normalizeCacheKey(name)),
       )
 
-      await syncScanFromCache(admin, scan, finalCache, sourceIngredients)
+      await syncScanFromCache(admin, scan, finalCache)
 
       const status = unresolved.length > 0 ? "partial" : "completed"
       const message = unresolved.length > 0
