@@ -159,7 +159,7 @@ function ProcessingScreen({ tip, tipIndex, total, onCancel }: { tip: string; tip
         ))}
       </View>
       <TouchableOpacity style={styles.cancelProcessingBtn} onPress={onCancel}>
-        <Text style={styles.cancelProcessingText}>Cancel</Text>
+        <Text style={styles.cancelProcessingText}>Back to camera</Text>
       </TouchableOpacity>
     </View>
   )
