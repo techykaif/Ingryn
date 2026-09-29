@@ -8,8 +8,8 @@ import { filterTextToGuideBox } from '@/detection/textRegionFilter'
 
 export const IS_WEB = Platform.OS === 'web'
 
-export type ScanStep = 'camera' | 'processing' | 'manual'
-export type ScanError = { message: string; allowManual?: boolean } | null
+export type ScanStep = 'camera' | 'processing'
+export type ScanError = { message: string } | null
 
 const PROCESSING_TIPS = [
   'Identifying ingredients...',
@@ -32,7 +32,6 @@ export function useScanner(
   const [cameraActive, setCameraActive] = useState(false)
   const [cameraReady, setCameraReady] = useState(false)
   const [processingTip, setProcessingTip] = useState(0)
-  const [manualText, setManualText] = useState('')
   const [scanError, setScanError] = useState<ScanError>(null)
   const cameraRef = useRef<CameraView>(null)
   const tipInterval = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -42,6 +41,7 @@ export function useScanner(
   const startTipCycle = useCallback(() => {
     if (tipInterval.current) clearInterval(tipInterval.current)
     let i = 0
+    setProcessingTip(0)
     tipInterval.current = setInterval(() => {
       i = (i + 1) % PROCESSING_TIPS.length
       setProcessingTip(i)
@@ -83,42 +83,51 @@ export function useScanner(
 
   const processText = useCallback(async (text: string) => {
     if (!userId) {
-      setScanError({ message: 'Must be logged in to scan.', allowManual: true })
+      setStep('camera')
+      setScanError({ message: 'Please sign in before scanning.' })
       return
     }
+
     setScanError(null)
     setStep('processing')
     startTipCycle()
     requestIdRef.current += 1
     const requestId = requestIdRef.current
 
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
+    clearProcessingTimeout()
     timeoutRef.current = setTimeout(() => {
       if (requestIdRef.current !== requestId) return
       requestIdRef.current += 1
       stopTipCycle()
       clearProcessingTimeout()
-      setStep(IS_WEB ? 'manual' : 'camera')
-      setScanError({ message: 'The analysis took too long. Please try again.', allowManual: true })
+      setStep('camera')
+      setScanError({ message: 'The analysis took too long. Please try again.' })
     }, PROCESSING_TIMEOUT_MS)
 
     const { scanId, error } = await saveAnalysis(text, userId, preferences)
     clearProcessingTimeout()
+
     if (requestIdRef.current !== requestId) return
 
     stopTipCycle()
 
     if (error || !scanId) {
-      setStep(IS_WEB ? 'manual' : 'camera')
-      setScanError({ message: error || 'Could not analyse ingredients. Please try again.', allowManual: true })
+      setStep('camera')
+      setScanError({ message: error || 'Could not analyse ingredients. Please try again.' })
       return
     }
 
-    setManualText('')
     setScanError(null)
-    setStep(IS_WEB ? 'manual' : 'camera')
+    setStep('camera')
     onSuccess(scanId)
-  }, [userId, preferences, clearProcessingTimeout, startTipCycle, stopTipCycle, onSuccess])
+  }, [
+    userId,
+    preferences,
+    clearProcessingTimeout,
+    startTipCycle,
+    stopTipCycle,
+    onSuccess,
+  ])
 
   const recognizeFromUri = useCallback(async (
     uri: string,
@@ -126,8 +135,8 @@ export function useScanner(
   ) => {
     if (IS_WEB) {
       stopTipCycle()
-      setStep('manual')
-      setScanError({ message: 'Camera OCR is not available on web. Please type the ingredients manually.' })
+      setStep('camera')
+      setScanError({ message: 'Camera analysis is available in the mobile app.' })
       return
     }
 
@@ -135,8 +144,6 @@ export function useScanner(
       const TextRecognition = (await import('@react-native-ml-kit/text-recognition')).default
       const result = await TextRecognition.recognize(uri)
       const rawText = result.text?.trim() || ''
-      // Only camera captures pass a guideBox — gallery picks have no on-screen
-      // box to confine to, so they always use the full recognized text.
       const text = guideBox
         ? filterTextToGuideBox(
           result.blocks,
@@ -151,22 +158,20 @@ export function useScanner(
         stopTipCycle()
         setStep('camera')
         setScanError({
-          message: 'Could not read the label. Try better lighting or a flatter surface.',
-          allowManual: true,
+          message: 'Could not read the label. Try better lighting and keep the ingredients centered.',
         })
         return
       }
 
-      setManualText(text)
-      stopTipCycle()
-      setStep('manual')
-      setScanError(null)
+      // Direct flow: OCR -> durable server analysis -> results.
+      // There is deliberately no editable/manual review step here.
+      await processText(text)
     } catch (e: any) {
       stopTipCycle()
       setStep('camera')
-      setScanError({ message: e.message || 'Could not read the image.', allowManual: true })
+      setScanError({ message: e.message || 'Could not read the image.' })
     }
-  }, [stopTipCycle, guideViewport])
+  }, [guideViewport, processText, stopTipCycle])
 
   const handleCapture = useCallback(async () => {
     if (!cameraRef.current || !cameraReady) return
@@ -176,12 +181,11 @@ export function useScanner(
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.85,
         base64: false,
+        shutterSound: false,
       })
 
       if (!photo?.uri) return
 
-      setStep('processing')
-      startTipCycle()
       await recognizeFromUri(photo.uri, {
         photoWidth: photo.width,
         photoHeight: photo.height,
@@ -189,12 +193,9 @@ export function useScanner(
     } catch (e: any) {
       stopTipCycle()
       setStep('camera')
-      setScanError({
-        message: e.message || 'Could not take photo. Try again.',
-        allowManual: true,
-      })
+      setScanError({ message: e.message || 'Could not take photo. Try again.' })
     }
-  }, [cameraReady, startTipCycle, stopTipCycle, recognizeFromUri])
+  }, [cameraReady, stopTipCycle, recognizeFromUri])
 
   const handleGalleryPick = useCallback(async () => {
     setScanError(null)
@@ -207,49 +208,41 @@ export function useScanner(
 
       if (result.canceled || !result.assets?.[0]) return
 
-      setStep('processing')
-      startTipCycle()
       await recognizeFromUri(result.assets[0].uri)
     } catch (e: any) {
       stopTipCycle()
       setStep('camera')
-      setScanError({ message: e.message || 'Could not open gallery.', allowManual: true })
+      setScanError({ message: e.message || 'Could not open gallery.' })
     }
-  }, [startTipCycle, stopTipCycle, recognizeFromUri])
-
-  const handleManualSubmit = useCallback(async () => {
-    if (!manualText.trim() || manualText.trim().length < 3) {
-      setScanError({ message: 'Please enter at least one ingredient.' })
-      return
-    }
-    await processText(manualText.trim())
-  }, [manualText, processText])
+  }, [stopTipCycle, recognizeFromUri])
 
   const clearError = useCallback(() => setScanError(null), [])
 
   const cancelProcessing = useCallback(() => {
     stopTipCycle()
     clearProcessingTimeout()
-    requestIdRef.current += 1 // Invalidate current request
+    requestIdRef.current += 1
     setScanError(null)
-    setStep(IS_WEB ? 'manual' : 'camera')
+    setStep('camera')
   }, [stopTipCycle, clearProcessingTimeout])
 
   return {
-    step, setStep,
-    flash, setFlash,
+    step,
+    setStep,
+    flash,
+    setFlash,
     cameraActive,
-    cameraReady, setCameraReady,
+    cameraReady,
+    setCameraReady,
     processingTip,
-    manualText, setManualText,
-    scanError, clearError,
+    scanError,
+    clearError,
     cameraRef,
     processingTips: PROCESSING_TIPS,
     activateCamera,
     deactivateCamera,
     handleCapture,
     handleGalleryPick,
-    handleManualSubmit,
     cancelProcessing,
     recognizeFromUri,
   }
