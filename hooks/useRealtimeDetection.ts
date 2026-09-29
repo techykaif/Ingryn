@@ -23,6 +23,12 @@ import {
   type DetectionState,
   type DetectionClassification,
 } from '@/detection/CameraStateMachine'
+import {
+  beginScanGeneration,
+  createScanGeneration,
+  invalidateScanGeneration,
+  isCurrentScanGeneration,
+} from './scanGeneration'
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
