@@ -137,6 +137,10 @@ Do not add ingredients that are not explicitly represented above. Return one res
     const parsed = await callGemini(prompt)
     const grounded = filterAnalysisToSource(parsed, unknownIngredients)
 
+    // Best-effort cost telemetry. This must never turn a successful AI
+    // analysis into a user-visible failure if the telemetry write is down.
+    void recordGeminiUsage(admin, user.id, unknownIngredients.length)
+
     const cached = await persistNewIngredients(
       admin,
       grounded,
@@ -154,6 +158,21 @@ Do not add ingredients that are not explicitly represented above. Return one res
     })
   }
 })
+
+async function recordGeminiUsage(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  unknownIngredientCount: number,
+) {
+  try {
+    await admin.rpc("record_gemini_usage", {
+      p_user_id: userId,
+      p_unknown_ingredient_count: unknownIngredientCount,
+    })
+  } catch {
+    // Telemetry is intentionally non-blocking.
+  }
+}
 
 type CachedIngredient = {
   id: string
