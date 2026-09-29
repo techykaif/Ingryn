@@ -204,12 +204,41 @@ async function persistNewIngredients(
   const records = analysis
     .filter((item) => item && typeof item === "object")
     .map((item) => item as Record<string, unknown>)
-    .filter((item) =>
-      typeof item.name === "string" &&
-      allowedSources.has(normalizeCacheKey(item.name))
+    .map((item) => {
+      const modelName =
+        typeof item.name === "string"
+          ? normalizeCacheKey(item.name)
+          : ""
+
+      const sourceMatch = sourceIngredients.find((source) => {
+        const normalizedSource = normalizeCacheKey(source)
+
+        if (normalizedSource === modelName) {
+          return true
+        }
+
+        return (
+          normalizedSource.startsWith(modelName + " ") &&
+          /^\s*\(/.test(
+            normalizedSource.slice(modelName.length),
+          )
+        )
+      })
+
+      return {
+        item,
+        canonicalName: sourceMatch
+          ? normalizeCacheKey(sourceMatch)
+          : modelName,
+      }
+    })
+    .filter(
+      (item) =>
+        item.canonicalName.length > 1 &&
+        allowedSources.has(item.canonicalName),
     )
-    .map((item) => ({
-      name: normalizeCacheKey(String(item.name)),
+    .map(({ item, canonicalName }) => ({
+      name: canonicalName,
       aliases: Array.isArray(item.aliases)
         ? item.aliases.filter((value): value is string => typeof value === "string").slice(0, 20).map((value) => value.slice(0, 200))
         : [],
