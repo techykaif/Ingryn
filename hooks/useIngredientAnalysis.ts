@@ -141,79 +141,11 @@ async function fetchIngredientsByIds(
   return (data || []) as { safety_level: string }[]
 }
 
-// Save new ingredients returned by Gemini
+// Gemini now persists unknown ingredients server-side and returns
+// their database IDs. The client must never write shared ingredient records.
 async function saveIngredients(analysis: IngredientAnalysis[]): Promise<string[]> {
-  // NOTE: personal_flag is intentionally NOT included here. This ingredient
-  // record is cached globally and shared across all users, so any flag Gemini
-  // returns is only valid for whichever user's preferences triggered this
-  // particular analysis. Persisting it would leak that user's health context
-  // to every other user who later hits the cache for this ingredient.
-  // Country-specific regulatory status is maintained separately in
-  // ingredient_country_rules and verified by the country-rule refresh pipeline.
-  // Personal relevance is computed per-viewer, client-side, in getPersonalFlag()
-  // on the results screen instead.
-  const normalizedIngredients = analysis
-    .map(ingredient => ({
-      name: ingredient.name.toLowerCase().trim(),
-      aliases: ingredient.aliases || [],
-      category: ingredient.category || 'Unknown',
-      description: ingredient.description || '',
-      safety_level: ingredient.safety_level || 'unknown',
-      health_concerns: ingredient.health_concerns || [],
-    }))
-    .filter(item => item.name.length > 0)
-
-  if (normalizedIngredients.length === 0) return []
-
-  const names = normalizedIngredients.map(item => item.name)
-  const { data: existing } = await supabase
-    .from('ingredients')
-    .select('id, name')
-    .in('name', names)
-
-  const existingByName = new Map<string, string>((existing || []).map(row => [row.name, row.id]))
-  const insertPayload = normalizedIngredients.filter(item => !existingByName.has(item.name))
-
-  if (insertPayload.length > 0) {
-    const { data: insertedRows, error: insertError } = await supabase
-      .from('ingredients')
-      .upsert(insertPayload.map(item => ({
-        name: item.name,
-        aliases: item.aliases,
-        category: item.category,
-        description: item.description,
-        safety_level: item.safety_level,
-        health_concerns: item.health_concerns,
-      })), { onConflict: 'name', ignoreDuplicates: true })
-      .select('id, name')
-
-    if (insertError) {
-      throw insertError
-    }
-
-    for (const row of insertedRows || []) {
-      existingByName.set(row.name, row.id)
-    }
-
-    // ignoreDuplicates means a row skipped due to a concurrent insert won't
-    // come back from .select() above — pick up its id with one more lookup
-    const stillMissing = insertPayload
-      .map(item => item.name)
-      .filter(name => !existingByName.has(name))
-
-    if (stillMissing.length > 0) {
-      const { data: raceExisting } = await supabase
-        .from('ingredients')
-        .select('id, name')
-        .in('name', stillMissing)
-      for (const row of raceExisting || []) {
-        existingByName.set(row.name, row.id)
-      }
-    }
-  }
-
-  return normalizedIngredients
-    .map(item => existingByName.get(item.name))
+  return analysis
+    .map((ingredient) => ingredient.id)
     .filter((id): id is string => Boolean(id))
 }
 
