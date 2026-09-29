@@ -37,6 +37,8 @@ type ScanData = {
   created_at: string
   raw_ocr_text: string
   ingredient_ids: string[]
+  analysis_status: 'pending' | 'processing' | 'completed' | 'partial' | 'failed'
+  analysis_error: string | null
 }
 
 const ALLERGY_KEYWORDS: Record<string, string[]> = {
@@ -93,10 +95,14 @@ export default function ResultsScreen() {
     if (!user?.id) return
     try {
       const { data: scanData, error: scanError } = await supabase
-        .from('scans').select('id, label, safety_score, created_at, raw_ocr_text, ingredient_ids').eq('id', scanId).eq('user_id', user.id).single()
+        .from('scans').select('id, label, safety_score, created_at, raw_ocr_text, ingredient_ids, analysis_status, analysis_error').eq('id', scanId).eq('user_id', user.id).single()
       if (scanError) throw scanError
       setScan(scanData)
       setLabelText(scanData.label || '')
+      useScanProgressStore.getState().setActiveScan(
+        scanId,
+        scanData.analysis_status === 'pending' || scanData.analysis_status === 'processing',
+      )
 
       if (scanData.ingredient_ids?.length > 0) {
         const [ingredientResult, countryRules] = await Promise.all([
