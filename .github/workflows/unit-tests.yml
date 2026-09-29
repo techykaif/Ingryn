@@ -22,5 +22,16 @@ jobs:
       - name: Install dependencies
         run: npm install --ignore-scripts
 
+      - name: Regenerate package lock
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Upload regenerated lockfile
+        uses: actions/upload-artifact@v5
+        with:
+          name: regenerated-package-lock
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Run unit tests
         run: npm test
