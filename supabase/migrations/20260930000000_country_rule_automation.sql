@@ -26,6 +26,30 @@ CREATE TABLE IF NOT EXISTS public.country_rule_sources (
   next_attempt_at timestamptz
 );
 
+ALTER TABLE public.country_rule_sources
+  ADD COLUMN IF NOT EXISTS adapter_key text NOT NULL DEFAULT 'gemini_search_grounded',
+  ADD COLUMN IF NOT EXISTS parser_version integer NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS last_content_hash text,
+  ADD COLUMN IF NOT EXISTS priority integer NOT NULL DEFAULT 100,
+  ADD COLUMN IF NOT EXISTS next_attempt_at timestamptz;
+
+UPDATE public.country_rule_sources
+SET
+  adapter_key = COALESCE(adapter_key, 'gemini_search_grounded'),
+  parser_version = COALESCE(parser_version, 1),
+  priority = CASE country_code
+    WHEN 'IN' THEN 10
+    WHEN 'US' THEN 20
+    WHEN 'EU' THEN 30
+    WHEN 'UK' THEN 40
+    WHEN 'CA' THEN 50
+    WHEN 'AU' THEN 60
+    WHEN 'JP' THEN 70
+    WHEN 'CN' THEN 80
+    ELSE priority
+  END,
+  updated_at = now();
+
 INSERT INTO public.country_rule_sources
   (country_code, country_name, source_name, source_url, source_type, adapter_key, priority)
 VALUES
@@ -80,6 +104,20 @@ CREATE TABLE IF NOT EXISTS public.ingredient_country_rules (
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (ingredient_id, country_code)
 );
+
+ALTER TABLE public.ingredient_country_rules
+  DROP CONSTRAINT IF EXISTS ingredient_country_rules_status_check;
+
+ALTER TABLE public.ingredient_country_rules
+  ADD CONSTRAINT ingredient_country_rules_status_check
+  CHECK (status IN (
+    'permitted',
+    'permitted_with_limits',
+    'banned',
+    'under_review',
+    'no_data',
+    'other'
+  ));
 
 CREATE INDEX IF NOT EXISTS ingredient_country_rules_country_status_idx
   ON public.ingredient_country_rules (country_code, status);
