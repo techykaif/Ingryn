@@ -80,7 +80,7 @@ export function filterAnalysisToSource(
 
       return source.normalized.startsWith(normalizedName + " ")
         && source.raw.trim().toLowerCase().startsWith(name.trim().toLowerCase())
-        && source.raw.trim().slice(name.trim().length).startsWith("(")
+        && /^\s*\(/.test(source.raw.trim().slice(name.trim().length))
     })
 
     return matches.length === 1
