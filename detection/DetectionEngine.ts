@@ -195,6 +195,20 @@ export class DetectionEngine {
       )
     }
 
+    // An explicit, readable Ingredients header is a strong structural
+    // classifier. Once the nutrition guard above has ruled out a Nutrition
+    // Facts table, do not let a long compound ingredient line dilute it.
+    if (hasIngredientHeader && !hasStrongNutritionSignal) {
+      return this.buildResult(
+        'INGREDIENTS',
+        Math.max(confidence, INGREDIENT_HIGH_THRESHOLD),
+        nutritionScore,
+        0,
+        [],
+        'Ingredient list detected!'
+      )
+    }
+
     // ── Step 7: Classify ──
     if (confidence >= INGREDIENT_HIGH_THRESHOLD) {
       return this.buildResult(
