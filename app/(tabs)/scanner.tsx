@@ -115,8 +115,6 @@ export default function ScannerScreen() {
       error={scanError?.message}
       clearError={clearError}
       detectionState={detectionState}
-      confidence={confidence}
-      classification={classification}
       guidanceMessage={guidanceMessage}
       isScanning={isScanning}
     />
