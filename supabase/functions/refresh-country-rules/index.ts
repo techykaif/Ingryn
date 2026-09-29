@@ -177,12 +177,22 @@ Deno.serve(async (req: Request) => {
           .eq("country_code", source.country_code)
           .throwOnError()
 
+        await admin
+          .from("ingredient_country_rules")
+          .update({
+            verified_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("country_code", source.country_code)
+          .throwOnError()
+
         await finishRun(admin, runId, {
           status: "unchanged",
           sourceHash,
           metadata: {
             sourceChanged: false,
             sourceName: source.source_name,
+            verifiedExistingRules: true,
           },
         })
 
@@ -269,6 +279,13 @@ Deno.serve(async (req: Request) => {
         source.country_code,
       )
 
+      await admin
+        .from("country_rule_versions")
+        .update({ state: "superseded" })
+        .eq("country_code", source.country_code)
+        .eq("state", "published")
+        .throwOnError()
+
       const { data: version, error: versionError } = await admin
         .from("country_rule_versions")
         .insert({
@@ -320,6 +337,19 @@ Deno.serve(async (req: Request) => {
           )
           .throwOnError()
       }
+
+      // Every rule was considered against the newly checked source.
+      // Mark all country rows as verified against this published version;
+      // changed rows already carry their specific evidence above.
+      await admin
+        .from("ingredient_country_rules")
+        .update({
+          source_version_id: version.id,
+          verified_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("country_code", source.country_code)
+        .throwOnError()
 
       await admin
         .from("country_rule_sources")
@@ -944,7 +974,7 @@ function validateVerification(
 function validDate(value?: string | null): boolean {
   return (
     !!value &&
-    /^\\d{4}-\\d{2}-\\d{2}$/.test(value)
+    /^\d{4}-\d{2}-\d{2}$/.test(value)
   )
 }
 
@@ -952,7 +982,7 @@ function safeHostname(value: string): string | null {
   try {
     return new URL(value).hostname
       .toLowerCase()
-      .replace(/^www\\./, "")
+      .replace(/^www\./, "")
   } catch {
     return null
   }
