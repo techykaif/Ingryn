@@ -90,6 +90,7 @@ export function useRealtimeDetection(
   const isProcessingRef = useRef(false)
   const isScanningRef = useRef(false)
   const isMountedRef = useRef(true)
+  const scanGenerationRef = useRef(createScanGeneration())
 
   // ── Initialize engine & state machine (once) ──
   useEffect(() => {
@@ -127,6 +128,12 @@ export function useRealtimeDetection(
     if (sm.state === 'CAPTURING' || sm.state === 'PROCESSING') return
 
     isProcessingRef.current = true
+    const generationToken = beginScanGeneration(scanGenerationRef.current)
+    const isCurrentFrame = () =>
+      isMountedRef.current &&
+      isScanningRef.current &&
+      isCurrentScanGeneration(scanGenerationRef.current, generationToken)
+
     // Tracked outside the try body so the `finally` block below can always
     // clean it up, regardless of which return path this frame takes.
     let previewUri: string | null = null
@@ -141,7 +148,7 @@ export function useRealtimeDetection(
       })
       previewUri = photo?.uri ?? null
 
-      if (!photo?.uri || !isMountedRef.current || !isScanningRef.current) return
+      if (!photo?.uri || !isCurrentFrame()) return
 
       // ── Step 2: Run ML Kit OCR ──
       const TextRecognition = (
@@ -156,7 +163,7 @@ export function useRealtimeDetection(
         guideViewport
       ).trim()
 
-      if (!isMountedRef.current || !isScanningRef.current) return
+      if (!isCurrentFrame()) return
 
       // ── Step 3: Run Detection Engine ──
       const detection: DetectionResult = engine.detect(ocrText)
@@ -183,7 +190,7 @@ export function useRealtimeDetection(
       }
 
       // ── Step 6: Auto-capture if CONFIRMED ──
-      if (sm.state === 'CONFIRMED' && isScanningRef.current) {
+      if (sm.state === 'CONFIRMED' && isCurrentFrame()) {
         sm.transition({ type: 'CAPTURE_START' })
         setDetectionState('CAPTURING')
 
@@ -195,7 +202,14 @@ export function useRealtimeDetection(
             shutterSound: false,
           })
 
-          if (capturePhoto?.uri && isMountedRef.current) {
+          if (!isCurrentFrame()) {
+            if (capturePhoto?.uri) {
+              FileSystem.deleteAsync(capturePhoto.uri, { idempotent: true }).catch(() => {})
+            }
+            return
+          }
+
+          if (capturePhoto?.uri) {
             sm.transition({ type: 'CAPTURE_COMPLETE' })
             setDetectionState('PROCESSING')
 
@@ -204,6 +218,7 @@ export function useRealtimeDetection(
             onAutoCapture(capturePhoto.uri, capturePhoto.width, capturePhoto.height)
           }
         } catch (captureError) {
+          if (!isCurrentFrame()) return
           console.warn('[RTIDS] Auto-capture failed:', captureError)
           // Reset to allow retry
           sm.transition({ type: 'RESET' })
@@ -248,6 +263,7 @@ export function useRealtimeDetection(
     if (isScanningRef.current || Platform.OS === 'web') return
 
     isScanningRef.current = true
+    beginScanGeneration(scanGenerationRef.current)
     setIsScanning(true)
 
     stateMachineRef.current?.transition({ type: 'START_SCANNING' })
@@ -262,6 +278,7 @@ export function useRealtimeDetection(
   // ── Stop scanning (internal — no state reset) ──
   const stopScanningInternal = useCallback(() => {
     isScanningRef.current = false
+    invalidateScanGeneration(scanGenerationRef.current)
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current)
       timeoutRef.current = null
@@ -272,7 +289,6 @@ export function useRealtimeDetection(
   const stopScanning = useCallback(() => {
     stopScanningInternal()
     setIsScanning(false)
-    isProcessingRef.current = false
   }, [stopScanningInternal])
 
   // ── Reset detection ──
@@ -288,6 +304,7 @@ export function useRealtimeDetection(
   // ── Cleanup on unmount ──
   useEffect(() => {
     return () => {
+      invalidateScanGeneration(scanGenerationRef.current)
       stopScanningInternal()
     }
   }, [stopScanningInternal])
