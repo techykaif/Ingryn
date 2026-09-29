@@ -30,20 +30,70 @@ type OcrBlock = { text: string; frame?: OcrFrame }
  * This deliberately does not fall back to fullText. The scanner should reject
  * an uncertain frame rather than analyze text known to be outside its target.
  */
+export type GuideViewport = {
+  width: number
+  height: number
+}
+
+/**
+ * Map the centered on-screen guide into captured-photo coordinates.
+ *
+ * CameraView uses a fill preview by default. When the photo and viewport have
+ * different aspect ratios, the preview is scaled until it covers the viewport
+ * and the excess is cropped from the center. The guide must therefore be
+ * transformed through that same scale + crop instead of applying the guide
+ * percentages directly to the photo.
+ */
+function getGuidePhotoRect(
+  photoWidth: number,
+  photoHeight: number,
+  viewportWidth: number,
+  viewportHeight: number
+) {
+  const guideWidth = viewportWidth * GUIDE_WIDTH_RATIO
+  const guideHeight = viewportHeight * GUIDE_HEIGHT_RATIO
+  const guideLeft = (viewportWidth - guideWidth) / 2
+  const guideTop = (viewportHeight - guideHeight) / 2
+
+  const scale = Math.max(
+    viewportWidth / photoWidth,
+    viewportHeight / photoHeight
+  )
+
+  const displayedWidth = photoWidth * scale
+  const displayedHeight = photoHeight * scale
+  const cropX = (displayedWidth - viewportWidth) / 2
+  const cropY = (displayedHeight - viewportHeight) / 2
+
+  const left = Math.max(0, (guideLeft + cropX) / scale)
+  const top = Math.max(0, (guideTop + cropY) / scale)
+  const right = Math.min(photoWidth, (guideLeft + guideWidth + cropX) / scale)
+  const bottom = Math.min(photoHeight, (guideTop + guideHeight + cropY) / scale)
+
+  return { left, top, right, bottom }
+}
+
 export function filterTextToGuideBox(
   blocks: OcrBlock[] | undefined,
   _fullText: string,
   photoWidth: number | undefined,
-  photoHeight: number | undefined
+  photoHeight: number | undefined,
+  viewport?: GuideViewport
 ): string {
-  if (!blocks?.length || !photoWidth || !photoHeight) return ''
+  if (
+    !blocks?.length ||
+    !photoWidth ||
+    !photoHeight ||
+    !viewport?.width ||
+    !viewport?.height
+  ) return ''
 
-  const boxW = photoWidth * GUIDE_WIDTH_RATIO
-  const boxH = photoHeight * GUIDE_HEIGHT_RATIO
-  const left = (photoWidth - boxW) / 2
-  const top = (photoHeight - boxH) / 2
-  const right = left + boxW
-  const bottom = top + boxH
+  const { left, top, right, bottom } = getGuidePhotoRect(
+    photoWidth,
+    photoHeight,
+    viewport.width,
+    viewport.height
+  )
 
   const framedBlocks = blocks.filter((block) => {
     const f = block.frame
