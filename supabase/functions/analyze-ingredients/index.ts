@@ -1,6 +1,7 @@
 // Setup type definitions for built-in Supabase Runtime APIs
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "jsr:@supabase/supabase-js@2"
+import { filterAnalysisToSource, splitTopLevelIngredients } from "./grounding.ts"
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")
 const GEMINI_API_URL =
@@ -87,10 +88,7 @@ Deno.serve(async (req: Request) => {
     // Keep the model grounded to the exact ingredient text supplied by the
     // scanner. The model may explain an ingredient, but it must not invent
     // component ingredients (for example "sodium" from "sodium citrate").
-    const sourceIngredients = cleanedInput
-      .split(",")
-      .map(item => item.trim())
-      .filter(item => item.length > 1)
+    const sourceIngredients = splitTopLevelIngredients(cleanedInput)
 
     const ALLOWED_CONDITIONS = ["diabetes", "hypertension", "celiac", "kidney_disease", "heart_disease", "pregnancy", "ibs", "liver_disease"]
     const ALLOWED_ALLERGIES = ["gluten", "dairy", "nuts", "peanuts", "soy", "eggs", "shellfish", "fish", "sulphites", "sesame"]
@@ -262,56 +260,3 @@ async function callGemini(prompt: string, retryCount = 0): Promise<unknown[]> {
   }
 }
 
-function normalizeIngredientName(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-}
-
-/**
- * Keep Gemini output grounded in the actual scanner text.
- *
- * Exact matches are preferred. A shortened name is accepted only when it is
- * the leading name of a single source item, such as:
- *   "calcium caseinate" -> "calcium caseinate (milk, ...)"
- *
- * We intentionally reject partial matches like:
- *   "sodium" -> "sodium citrate"
- * because the label contains multiple different sodium compounds and the
- * shorter term is not itself an ingredient on the label.
- */
-function filterAnalysisToSource(
-  analysis: unknown[],
-  sourceIngredients: string[],
-): unknown[] {
-  const sources = sourceIngredients
-    .map((source) => ({
-      raw: source,
-      normalized: normalizeIngredientName(source),
-    }))
-    .filter((source) => source.normalized.length > 1)
-
-  return analysis.filter((item) => {
-    if (!item || typeof item !== "object") return false
-
-    const name = typeof (item as { name?: unknown }).name === "string"
-      ? (item as { name: string }).name
-      : ""
-    const normalizedName = normalizeIngredientName(name)
-    if (!normalizedName) return false
-
-    const matches = sources.filter((source) => {
-      if (source.normalized === normalizedName) return true
-
-      // Allow a model to omit a parenthetical qualifier while preserving the
-      // complete main ingredient name.
-      return source.normalized.startsWith(normalizedName + " ")
-        && source.raw.trim().startsWith(name.trim())
-        && source.raw.trim().slice(name.trim().length).startsWith("(")
-    })
-
-    return matches.length === 1
-  })
-}
