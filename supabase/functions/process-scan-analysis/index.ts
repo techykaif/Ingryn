@@ -76,6 +76,8 @@ Deno.serve(async (req: Request) => {
     return json({ processed: false, reason: "no_jobs" })
   }
 
+  let retryCount = 0
+
   try {
     const { data: rawScan, error: scanError } = await admin
       .from("scans")
@@ -141,7 +143,7 @@ Deno.serve(async (req: Request) => {
 
     if (retryStateError) throw retryStateError
 
-    const retryCount = retryState.retry_count
+    retryCount = retryState.retry_count
     let ingredientNames = job.ingredient_names
     let cursor = job.ingredient_cursor
 
