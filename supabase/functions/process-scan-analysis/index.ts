@@ -52,9 +52,11 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Unauthorized" }, 401)
   }
 
-  const { data: job, error: claimError } = await admin
+  const { data: rawJob, error: claimError } = await admin
     .rpc("claim_scan_analysis_job")
-    .maybeSingle<ClaimedJob>()
+    .maybeSingle()
+
+  const job = rawJob as ClaimedJob | null
 
   if (claimError) {
     console.error("Failed to claim scan analysis job", claimError)
@@ -66,15 +68,17 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { data: scan, error: scanError } = await admin
+    const { data: typedScan, error: scanError } = await admin
       .from("scans")
       .select("id, user_id, raw_ocr_text, ingredient_ids")
       .eq("id", job.scan_id)
-      .maybeSingle<ScanRow>()
+      .maybeSingle()
 
     if (scanError) throw scanError
 
-    if (!scan) {
+    const typedScan = scan as ScanRow | null
+
+    if (!typedScan) {
       await markJobComplete(admin, job.job_id)
       return json({ processed: true, scanId: job.scan_id, reason: "scan_missing" })
     }
@@ -86,9 +90,9 @@ Deno.serve(async (req: Request) => {
         analysis_error: null,
         analysis_updated_at: new Date().toISOString(),
       })
-      .eq("id", scan.id)
+      .eq("id", typedScan.id)
 
-    const sourceIngredients = parseIngredientNames(scan.raw_ocr_text ?? "")
+    const sourceIngredients = parseIngredientNames(typedScan.raw_ocr_text ?? "")
     if (sourceIngredients.length === 0) {
       await admin
         .from("scans")
@@ -97,10 +101,10 @@ Deno.serve(async (req: Request) => {
           analysis_error: "No ingredients could be identified.",
           analysis_updated_at: new Date().toISOString(),
         })
-        .eq("id", scan.id)
+        .eq("id", typedScan.id)
 
       await markJobFailed(admin, job.job_id, job.attempts, "No ingredients could be identified.")
-      return json({ processed: true, scanId: scan.id, status: "failed" })
+      return json({ processed: true, scanId: typedScan.id, status: "failed" })
     }
 
     let ingredientNames = job.ingredient_names
@@ -116,9 +120,9 @@ Deno.serve(async (req: Request) => {
       )
 
       if (ingredientNames.length === 0) {
-        await syncScanFromCache(admin, scan, initialCache, sourceIngredients)
+        await syncScanFromCache(admin, typedScan, initialCache, sourceIngredients)
         await markJobComplete(admin, job.job_id)
-        return json({ processed: true, scanId: scan.id, status: "completed" })
+        return json({ processed: true, scanId: typedScan.id, status: "completed" })
       }
 
       cursor = 0
@@ -140,7 +144,7 @@ Deno.serve(async (req: Request) => {
         (name) => !finalCache.has(normalizeCacheKey(name)),
       )
 
-      await syncScanFromCache(admin, scan, finalCache, sourceIngredients)
+      await syncScanFromCache(admin, typedScan, finalCache, sourceIngredients)
 
       const status = unresolved.length > 0 ? "partial" : "completed"
       const message = unresolved.length > 0
@@ -154,10 +158,10 @@ Deno.serve(async (req: Request) => {
           analysis_error: message,
           analysis_updated_at: new Date().toISOString(),
         })
-        .eq("id", scan.id)
+        .eq("id", typedScan.id)
 
       await markJobComplete(admin, job.job_id)
-      return json({ processed: true, scanId: scan.id, status })
+      return json({ processed: true, scanId: typedScan.id, status })
     }
 
     const chunk = ingredientNames.slice(cursor, cursor + CHUNK_SIZE)
@@ -169,7 +173,7 @@ Deno.serve(async (req: Request) => {
     if (uncachedChunk.length > 0) {
       await analyzeChunk(
         uncachedChunk.join(", "),
-        scan.user_id,
+        typedScan.user_id,
         req,
       )
     }
@@ -178,7 +182,7 @@ Deno.serve(async (req: Request) => {
     // makes the worker idempotent if Gemini completed a write but the process
     // died before the scan/job state was advanced.
     const cacheAfter = await findCachedIngredients(admin, sourceIngredients)
-    const ids = mergeIngredientIds(scan.ingredient_ids ?? [], cacheAfter)
+    const ids = mergeIngredientIds(typedScan.ingredient_ids ?? [], cacheAfter)
     const score = calculateSafetyScore(
       Array.from(cacheAfter.values()).map((ingredient) => ingredient.safety_level),
     )
@@ -202,7 +206,7 @@ Deno.serve(async (req: Request) => {
           : null,
         analysis_updated_at: new Date().toISOString(),
       })
-      .eq("id", scan.id)
+      .eq("id", typedScan.id)
 
     if (scanUpdateError) throw scanUpdateError
 
@@ -210,7 +214,7 @@ Deno.serve(async (req: Request) => {
       await markJobComplete(admin, job.job_id)
       return json({
         processed: true,
-        scanId: scan.id,
+        scanId: typedScan.id,
         status: unresolvedAfterChunk.length > 0 ? "partial" : "completed",
       })
     }
@@ -230,7 +234,7 @@ Deno.serve(async (req: Request) => {
 
     return json({
       processed: true,
-      scanId: scan.id,
+      scanId: typedScan.id,
       status: "processing",
       processedIngredients: nextCursor,
       totalIngredients: ingredientNames.length,
@@ -369,7 +373,7 @@ async function syncScanFromCache(
   cache: Map<string, CachedIngredient>,
   sourceIngredients: string[],
 ) {
-  const ids = mergeIngredientIds(scan.ingredient_ids ?? [], cache)
+  const ids = mergeIngredientIds(typedScan.ingredient_ids ?? [], cache)
   const score = calculateSafetyScore(
     Array.from(cache.values()).map((ingredient) => ingredient.safety_level),
   )
@@ -382,7 +386,7 @@ async function syncScanFromCache(
       safety_score: score,
       analysis_updated_at: new Date().toISOString(),
     })
-    .eq("id", scan.id)
+    .eq("id", typedScan.id)
 
   if (error) throw error
 }
