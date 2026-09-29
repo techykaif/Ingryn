@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import { analyzeIngredients, type IngredientAnalysis } from '@/lib/gemini'
 import { useScanProgressStore, type DietaryPreferences } from '@/store'
+import { splitIngredientText } from '@/lib/ingredientParser'
 
 export async function saveAnalysis(
   text: string,
@@ -90,10 +91,16 @@ async function processUnknownIngredientsInBackground(
 
 // Split raw text into individual ingredient names
 export function parseIngredientNames(text: string): string[] {
-  return text
-    .split(/,|;|\n/)
+  const seen = new Set<string>()
+
+  return splitIngredientText(text)
     .map(s => s.trim().toLowerCase())
     .filter(s => s.length > 1 && s.length < 100)
+    .filter(name => {
+      if (seen.has(name)) return false
+      seen.add(name)
+      return true
+    })
 }
 
 // Single Supabase query to check which ingredients are already cached
