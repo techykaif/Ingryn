@@ -8,6 +8,7 @@ import { StatusBar } from 'expo-status-bar'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { Colors, Fonts, FontSizes, Spacing, Radius, Shadows } from '@/constants/theme'
+import { fetchCountryRules } from '@/lib/countryRules'
 import { LinearGradient } from 'expo-linear-gradient'
 import {
   ArrowLeft, CheckCircle, Warning, ShieldWarning,
@@ -23,6 +24,7 @@ type Ingredient = {
   safety_level: 'safe' | 'caution' | 'harmful' | 'unknown'
   health_concerns: string[]
   country_status: Record<string, string>
+  country_raw_status?: Record<string, string>
 }
 
 const COUNTRIES: Record<string, { flag: string; label: string }> = {
@@ -42,6 +44,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
   banned:                { label: 'Banned',       color: Colors.harmful,       bg: Colors.harmfulLight },
   under_review:          { label: 'Under review', color: Colors.personal,      bg: Colors.personalLight },
   no_data:               { label: 'No data',      color: Colors.textTertiary,  bg: Colors.surfaceSecondary },
+  other:                 { label: 'Source-specific', color: Colors.caution, bg: Colors.cautionLight },
 }
 
 const SAFETY_CONFIG: Record<string, {
@@ -87,10 +90,26 @@ export default function IngredientDetailScreen() {
 
     async function fetchIngredient() {
       try {
-        const { data, error } = await supabase
-          .from('ingredients').select('id, name, aliases, category, description, safety_level, health_concerns, country_status').eq('id', ingredientId).single()
-        if (error) throw error
-        if (!cancelled) setIngredient(data)
+        const [ingredientResult, countryRules] = await Promise.all([
+          supabase
+            .from('ingredients')
+            .select('id, name, aliases, category, description, safety_level, health_concerns')
+            .eq('id', ingredientId)
+            .single(),
+          fetchCountryRules([ingredientId]),
+        ])
+
+        if (ingredientResult.error) throw ingredientResult.error
+
+        const rules = countryRules.get(ingredientId)
+
+        if (!cancelled) {
+          setIngredient({
+            ...ingredientResult.data,
+            country_status: rules?.status || {},
+            country_raw_status: rules?.rawStatus || {},
+          })
+        }
       } catch (e: any) {
         if (!cancelled) setErrorMsg(e.message || 'Could not load ingredient details.')
       } finally {
@@ -240,7 +259,9 @@ export default function IngredientDetailScreen() {
           <View style={[styles.sectionCard, Shadows.sm]}>
             {Object.entries(COUNTRIES).map(([code, { flag, label }], i) => {
               const status = ingredient.country_status?.[code] || 'no_data'
+              const rawStatus = ingredient.country_raw_status?.[code]
               const config = STATUS_CONFIG[status] || STATUS_CONFIG.no_data
+              const statusLabel = status === 'other' && rawStatus ? rawStatus : config.label
               return (
                 <View key={code}>
                   {i > 0 && <View style={styles.countryDivider} />}
@@ -249,7 +270,7 @@ export default function IngredientDetailScreen() {
                     <Text style={styles.countryLabel}>{label}</Text>
                     <View style={[styles.statusChip, { backgroundColor: config.bg }]}>
                       <Text style={[styles.statusChipText, { color: config.color }]}>
-                        {config.label}
+                        {statusLabel}
                       </Text>
                     </View>
                   </View>
