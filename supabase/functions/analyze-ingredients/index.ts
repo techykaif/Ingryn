@@ -37,14 +37,60 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: "Missing authorization" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
     }
 
-    const supabaseAdmin = createClient(
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
+    if (!serviceRoleKey) {
+      throw new Error("Server configuration error: missing service role key")
+    }
+
+    const admin = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? ""
+      serviceRoleKey,
     )
 
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(authHeader.replace("Bearer ", ""))
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
+    const workerToken = req.headers.get("x-scan-worker-token")
+    const workerUserId = req.headers.get("x-scan-user-id")
+    let userId: string
+
+    if (workerToken || workerUserId) {
+      if (!workerToken || !workerUserId) {
+        return new Response(JSON.stringify({ error: "Invalid internal worker request" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
+      }
+
+      const { data: expectedToken, error: tokenError } = await admin.rpc(
+        "get_scan_analysis_worker_token",
+      )
+
+      if (
+        tokenError ||
+        typeof expectedToken !== "string" ||
+        !expectedToken ||
+        workerToken !== expectedToken
+      ) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
+      }
+
+      const { data: userLookup, error: userLookupError } =
+        await admin.auth.admin.getUserById(workerUserId)
+
+      if (userLookupError || !userLookup.user) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
+      }
+
+      userId = workerUserId
+    } else {
+      const supabaseAdmin = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      )
+
+      const { data: { user }, error: authError } =
+        await supabaseAdmin.auth.getUser(authHeader.replace("Bearer ", ""))
+
+      if (authError || !user) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
+      }
+
+      userId = user.id
     }
 
     const { ingredientText } = (await req.json()) as {
@@ -84,16 +130,6 @@ Deno.serve(async (req: Request) => {
 
     // The server owns the global ingredient cache. This prevents a user from
     // burning Gemini quota on ingredients that INGRYN already knows.
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
-    if (!serviceRoleKey) {
-      throw new Error("Server configuration error: missing service role key")
-    }
-
-    const admin = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      serviceRoleKey,
-    )
-
     const cacheRows = await findCachedIngredients(admin, sourceIngredients)
     const unknownIngredients = sourceIngredients.filter(
       (item) => !cacheRows.has(normalizeCacheKey(item)),
@@ -135,7 +171,7 @@ Deno.serve(async (req: Request) => {
       const { data: usage, error: usageError } = await admin
         .from("ai_usage_daily")
         .select("gemini_requests")
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .eq("usage_date", new Date().toISOString().slice(0, 10))
         .maybeSingle()
 
@@ -182,7 +218,7 @@ Do not add ingredients that are not explicitly represented above. Return one res
 
     // Best-effort cost telemetry. This must never turn a successful AI
     // analysis into a user-visible failure if the telemetry write is down.
-    void recordGeminiUsage(admin, user.id, unknownIngredients.length)
+    void recordGeminiUsage(admin, userId, unknownIngredients.length)
 
     const cached = await persistNewIngredients(
       admin,
