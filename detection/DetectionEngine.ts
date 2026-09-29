@@ -17,7 +17,6 @@ import {
   INGREDIENT_TRIGGER_KEYWORDS,
   INGREDIENT_STRUCTURE_PATTERNS,
 } from './constants/ingredientKeywords'
-import { NUTRITION_KEYWORDS } from './constants/nutritionKeywords'
 import { COMMON_INGREDIENTS } from './constants/ingredientDatabase'
 import { FuzzyMatcher } from './FuzzyMatcher'
 import { evaluateTextQuality, textDensityScore } from './imageQuality'
@@ -78,6 +77,7 @@ const STRONG_NUTRITION_KEYWORDS = [
   'nutritional values',
   'supplement facts',
   'calories',
+  'energy',
   'serving size',
   'servings per container',
   'amount per serving',
@@ -341,15 +341,21 @@ export class DetectionEngine {
     return STRONG_NUTRITION_KEYWORDS.some(keyword => lower.includes(keyword))
   }
 
-  /** Score presence of nutrition-related keywords (0–1). */
+  /**
+   * Score nutrition-table-specific signals (0–1).
+   *
+   * Do not count generic nutrient names such as sodium, calcium, iron,
+   * potassium, magnesium, zinc, vitamin, or protein here. Those are normal
+   * ingredient names and were the source of the false 100% Nutrition result.
+   */
   private scoreNutrition(lower: string): number {
     let matches = 0
-    for (const keyword of NUTRITION_KEYWORDS) {
+    for (const keyword of STRONG_NUTRITION_KEYWORDS) {
       if (lower.includes(keyword)) {
         matches++
       }
     }
-    // 5+ nutrition keywords is a very strong signal
+
     if (matches >= 5) return 1
     return Math.min(matches / 5, 1)
   }
