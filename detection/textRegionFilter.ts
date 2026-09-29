@@ -11,9 +11,9 @@
  * the caller's dimensions; this module only performs the region gate.
  */
 
-/** Guide box occupies this fraction of the frame, centered. */
-export const GUIDE_WIDTH_RATIO = 0.86
-export const GUIDE_HEIGHT_RATIO = 0.26
+/** Invisible camera focus zone used by OCR; there is intentionally no drawn box. */
+export const GUIDE_WIDTH_RATIO = 0.90
+export const GUIDE_HEIGHT_RATIO = 0.48
 
 type OcrFrame = { left: number; top: number; width: number; height: number }
 type OcrBlock = { text: string; frame?: OcrFrame }
