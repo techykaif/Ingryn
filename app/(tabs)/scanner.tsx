@@ -51,7 +51,11 @@ export default function ScannerScreen() {
     handleManualSubmit,
     cancelProcessing,
     recognizeFromUri,
-  } = useScanner(user?.id || '', (scanId) => router.push(`/results/${scanId}`))
+  } = useScanner(
+    user?.id || '',
+    (scanId) => router.push(`/results/${scanId}`),
+    { width, height }
+  )
 
   // ── Real-time detection ──
   const handleAutoCapture = useCallback((uri: string, width?: number, height?: number) => {
@@ -69,7 +73,12 @@ export default function ScannerScreen() {
     startScanning,
     stopScanning,
     resetDetection,
-  } = useRealtimeDetection(cameraRef, cameraReady, handleAutoCapture)
+  } = useRealtimeDetection(
+    cameraRef,
+    cameraReady,
+    handleAutoCapture,
+    { width, height }
+  )
 
   // Start realtime scanning when camera becomes ready (native only)
   useEffect(() => {
