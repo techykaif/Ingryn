@@ -13,6 +13,7 @@ import { useDietaryPreferences } from '@/hooks/useDietaryPreferences'
 import { parseIngredientNames } from '@/hooks/useIngredientAnalysis'
 import { Colors, Fonts, FontSizes, Spacing, Radius, Shadows } from '@/constants/theme'
 import { getScoreColor, getScoreLabel, getSafetyColor, getSafetyLabel, formatDate } from '@/lib/scanUtils'
+import { fetchCountryRules } from '@/lib/countryRules'
 import {
   ArrowLeft, PencilSimple, Warning, CheckCircle,
   ShieldWarning, Globe, User, ArrowRight, X
@@ -98,11 +99,23 @@ export default function ResultsScreen() {
       setLabelText(scanData.label || '')
 
       if (scanData.ingredient_ids?.length > 0) {
-        const { data: ingredientData, error } = await supabase
-          .from('ingredients').select('id, name, aliases, category, description, safety_level, health_concerns, country_status').in('id', scanData.ingredient_ids)
-        if (error) throw error
+        const [ingredientResult, countryRules] = await Promise.all([
+          supabase
+            .from('ingredients')
+            .select('id, name, aliases, category, description, safety_level, health_concerns')
+            .in('id', scanData.ingredient_ids),
+          fetchCountryRules(scanData.ingredient_ids),
+        ])
+
+        if (ingredientResult.error) throw ingredientResult.error
+
         const order = { harmful: 0, caution: 1, unknown: 2, safe: 3 }
-        const sorted = (ingredientData || []).sort((a, b) =>
+        const merged = (ingredientResult.data || []).map(ingredient => ({
+          ...ingredient,
+          country_status: countryRules.get(ingredient.id)?.status || {},
+        }))
+
+        const sorted = merged.sort((a, b) =>
           (order[a.safety_level as keyof typeof order] ?? 2) -
           (order[b.safety_level as keyof typeof order] ?? 2)
         )
