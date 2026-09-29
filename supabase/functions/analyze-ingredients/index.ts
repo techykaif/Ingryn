@@ -130,7 +130,7 @@ For each ingredient provide:
 - health_concerns: string[] (empty array if none)
 
 Ingredients to analyze (these are the only ingredients you may analyze):
-${unknownIngredients.map((item, index) => `${index + 1}. ${item}`).join("\\n")}
+${unknownIngredients.map((item, index) => `${index + 1}. ${item}`) .join("\n")}
 
 Do not add ingredients that are not explicitly represented above. Return one result per analyzable input item.`
 
@@ -163,7 +163,7 @@ type CachedIngredient = {
 function normalizeCacheKey(value: string): string {
   return value
     .toLowerCase()
-    .replace(/\\s+/g, " ")
+     .replace(/\s+/g, " ")
     .trim()
 }
 
