@@ -2,7 +2,7 @@
 
 > AI-powered ingredient intelligence for the products you buy.
 
-INGRYN is a React Native / Expo mobile application that turns an ingredient label into a structured, easy-to-understand analysis. Users scan a label with the camera or pick a label photo from the gallery. OCR extracts the label and sends it directly into the durable server analysis pipeline, where INGRYN combines cached ingredient data with server-side Gemini analysis to explain what is in the product and how it relates to the user's preferences.
+INGRYN is a React Native / Expo mobile application that turns an ingredient label into a structured, easy-to-understand analysis. Users can scan a label with the camera, choose a label photo from the gallery, or enter ingredients manually. Camera and photo OCR go directly into the durable server analysis pipeline, while manual entry sends the entered text directly to the same analysis path.
 
 **Status:** Active development  
 **Platform:** iOS + Android  
@@ -20,8 +20,9 @@ INGRYN is a React Native / Expo mobile application that turns an ingredient labe
 - Gallery/image fallback
 - ML Kit OCR
 - Direct OCR → analysis flow with no manual review screen
+- Manual ingredient entry
 - Automatic real-time ingredient-list detection through **RTIDS**
-- Tap-to-capture remains available as a fallback
+- Tap-to-capture remains available as a camera fallback
 
 ### 🧠 AI ingredient analysis
 
@@ -126,8 +127,6 @@ RTIDS is built around application-level detection logic including a custom `Dete
 Camera / Gallery / Manual Text
             ↓
            OCR
-            ↓
-     User Review & Edit
             ↓
    Ingredient Recognition
             ↓
