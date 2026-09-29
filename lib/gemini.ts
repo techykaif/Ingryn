@@ -9,7 +9,7 @@ export type IngredientAnalysis = {
   description: string
   safety_level: 'safe' | 'caution' | 'harmful' | 'unknown'
   health_concerns: string[]
-  country_status: Record<string, string>
+  country_status?: Record<string, string>
   personal_flag?: string | null
 }
 
@@ -17,10 +17,10 @@ export type IngredientAnalysis = {
 
 export async function analyzeIngredients(
   ingredientText: string,
-  preferences?: DietaryPreferences
+  _preferences?: DietaryPreferences
 ): Promise<IngredientAnalysis[]> {
   const { data, error } = await supabase.functions.invoke('analyze-ingredients', {
-    body: { ingredientText, preferences },
+    body: { ingredientText },
   })
 
   if (error) {
