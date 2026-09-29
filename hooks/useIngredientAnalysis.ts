@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase'
-import { analyzeIngredients, type IngredientAnalysis } from '@/lib/gemini'
+import { analyzeIngredients } from '@/lib/gemini'
 import { useScanProgressStore, type DietaryPreferences } from '@/store'
 import { splitIngredientText } from '@/lib/ingredientParser'
 import {
@@ -81,7 +81,9 @@ async function processUnknownIngredientsInBackground(
   scanId: string,
   unknownNames: string[],
   currentIds: string[],
-  preferences?: DietaryPreferences
+  currentTotal: number,
+  currentCount: number,
+  preferences?: DietaryPreferences,
 ) {
   try {
     // The Edge Function caps a single AI request at 25 unknown ingredients.
