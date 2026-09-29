@@ -84,6 +84,14 @@ Deno.serve(async (req: Request) => {
       .replace(/\s+/g, " ")
       .trim()
 
+    // Keep the model grounded to the exact ingredient text supplied by the
+    // scanner. The model may explain an ingredient, but it must not invent
+    // component ingredients (for example "sodium" from "sodium citrate").
+    const sourceIngredients = cleanedInput
+      .split(",")
+      .map(item => item.trim())
+      .filter(item => item.length > 1)
+
     const ALLOWED_CONDITIONS = ["diabetes", "hypertension", "celiac", "kidney_disease", "heart_disease", "pregnancy", "ibs", "liver_disease"]
     const ALLOWED_ALLERGIES = ["gluten", "dairy", "nuts", "peanuts", "soy", "eggs", "shellfish", "fish", "sulphites", "sesame"]
     const ALLOWED_DIET_TYPES = ["none", "vegan", "vegetarian", "keto", "paleo", "halal", "kosher"]
@@ -117,7 +125,7 @@ User health context (flag ingredients relevant to these):
     const prompt = `You are an ingredient safety expert and food scientist. Analyze these product ingredients and return a JSON array. Return ONLY valid JSON — no preamble, no markdown, no backticks, no explanations. Your response must start with [ and end with ].
 ${preferencesContext}
 For each ingredient provide:
-- name: string
+- name: string — MUST refer to one complete ingredient from the supplied input. Do not split compounds into component words. For example, if the input contains "sodium citrate", return "sodium citrate", never "sodium". If the input contains "soy lecithin", return "soy lecithin", never "soy".
 - aliases: string[] (E-numbers, alternative names)
 - category: string (e.g. "Preservative", "Artificial Colour", "Sweetener")
 - description: string (2-3 sentences)
@@ -127,11 +135,15 @@ For each ingredient provide:
   Values must be one of: "permitted", "permitted_with_limits", "banned", "under_review", "no_data"
 - personal_flag: string | null (only if this ingredient is relevant to the user's health conditions or allergies — explain why briefly, otherwise null)
 
-Ingredients to analyze: ${cleanedInput}`
+Ingredients to analyze (these are the only ingredients you may analyze):
+${sourceIngredients.map((item, index) => `${index + 1}. ${item}`).join("\n")}
+
+Do not add ingredients that are not explicitly represented by one of the items above. Return one result per analyzable input item.`
 
     const parsed = await callGemini(prompt)
+    const grounded = filterAnalysisToSource(parsed, sourceIngredients)
 
-    return new Response(JSON.stringify(parsed), {
+    return new Response(JSON.stringify(grounded), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     })
   } catch (e) {
@@ -248,4 +260,58 @@ async function callGemini(prompt: string, retryCount = 0): Promise<unknown[]> {
     }
     throw new Error("Failed to parse ingredient analysis from Gemini")
   }
+}
+
+function normalizeIngredientName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+/**
+ * Keep Gemini output grounded in the actual scanner text.
+ *
+ * Exact matches are preferred. A shortened name is accepted only when it is
+ * the leading name of a single source item, such as:
+ *   "calcium caseinate" -> "calcium caseinate (milk, ...)"
+ *
+ * We intentionally reject partial matches like:
+ *   "sodium" -> "sodium citrate"
+ * because the label contains multiple different sodium compounds and the
+ * shorter term is not itself an ingredient on the label.
+ */
+function filterAnalysisToSource(
+  analysis: unknown[],
+  sourceIngredients: string[],
+): unknown[] {
+  const sources = sourceIngredients
+    .map((source) => ({
+      raw: source,
+      normalized: normalizeIngredientName(source),
+    }))
+    .filter((source) => source.normalized.length > 1)
+
+  return analysis.filter((item) => {
+    if (!item || typeof item !== "object") return false
+
+    const name = typeof (item as { name?: unknown }).name === "string"
+      ? (item as { name: string }).name
+      : ""
+    const normalizedName = normalizeIngredientName(name)
+    if (!normalizedName) return false
+
+    const matches = sources.filter((source) => {
+      if (source.normalized === normalizedName) return true
+
+      // Allow a model to omit a parenthetical qualifier while preserving the
+      // complete main ingredient name.
+      return source.normalized.startsWith(normalizedName + " ")
+        && source.raw.trim().startsWith(name.trim())
+        && source.raw.trim().slice(name.trim().length).startsWith("(")
+    })
+
+    return matches.length === 1
+  })
 }
