@@ -210,7 +210,6 @@ function CameraScreen({
   error?: string
   clearError: () => void
   detectionState: DetectionState
-  confidence: number
   guidanceMessage: string
   isScanning: boolean
 }) {
