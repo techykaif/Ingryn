@@ -35,7 +35,7 @@ describe('guide-box OCR filtering', () => {
       [
         { text: 'OUTSIDE', frame: { left: 20, top: 100, width: 120, height: 40 } },
         { text: 'INGREDIENTS', frame: { left: 300, top: 900, width: 250, height: 50 } },
-        { text: 'NEARBY', frame: { left: 50, top: 900, width: 100, height: 40 } },
+        { text: 'NEARBY', frame: { left: 0, top: 900, width: 80, height: 40 } },
       ],
       'OUTSIDE INGREDIENTS NEARBY',
       1080,
