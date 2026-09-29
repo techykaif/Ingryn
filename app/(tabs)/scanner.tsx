@@ -15,7 +15,7 @@ import { useRealtimeDetection } from '@/hooks/useRealtimeDetection'
 import { Colors, Fonts, FontSizes, Spacing, Radius, Shadows } from '@/constants/theme'
 import type { DetectionState } from '@/detection/CameraStateMachine'
 import {
-  Image as ImageIcon, Lightning, LightningSlash,
+  Image as ImageIcon, TextT, Lightning, LightningSlash,
   Scan, ArrowLeft, Camera, Warning, X
 } from 'phosphor-react-native'
 
@@ -32,6 +32,7 @@ export default function ScannerScreen() {
     cameraActive,
     cameraReady, setCameraReady,
     processingTip,
+    manualText, setManualText,
     scanError, clearError,
     cameraRef,
     processingTips,
@@ -39,6 +40,8 @@ export default function ScannerScreen() {
     deactivateCamera,
     handleCapture,
     handleGalleryPick,
+    openManualEntry,
+    handleManualSubmit,
     cancelProcessing,
     recognizeFromUri,
   } = useScanner(
@@ -93,11 +96,30 @@ export default function ScannerScreen() {
     return <ProcessingScreen tip={processingTips[processingTip]} tipIndex={processingTip} total={processingTips.length} onCancel={cancelProcessing} />
   }
 
-
+  if (step === 'manual') {
+    return (
+      <ManualScreen
+        value={manualText}
+        onChange={setManualText}
+        onSubmit={handleManualSubmit}
+        onBack={() => {
+          setStep('camera')
+          clearError()
+          activateCamera()
+        }}
+        error={scanError?.message}
+        clearError={clearError}
+      />
+    )
+  }
 
   if (!permission?.granted) {
     return (
-      <PermissionScreen onGrant={requestPermission} onGallery={handleGalleryPick} />
+      <PermissionScreen
+        onGrant={requestPermission}
+        onGallery={handleGalleryPick}
+        onManual={openManualEntry}
+      />
     )
   }
 
@@ -111,6 +133,7 @@ export default function ScannerScreen() {
       onFlashToggle={() => setFlash(!flash)}
       onCapture={handleCapture}
       onGallery={handleGalleryPick}
+      onManual={openManualEntry}
       onExit={() => router.back()}
       error={scanError?.message}
       clearError={clearError}
@@ -164,7 +187,15 @@ function ProcessingScreen({ tip, tipIndex, total, onCancel }: { tip: string; tip
 }
 
 // ─── Permission ───────────────────────────────────────────────────────────────
-function PermissionScreen({ onGrant, onGallery }: { onGrant: () => void; onGallery: () => void }) {
+function PermissionScreen({
+  onGrant,
+  onGallery,
+  onManual,
+}: {
+  onGrant: () => void
+  onGallery: () => void
+  onManual: () => void
+}) {
   return (
     <View style={styles.permissionContainer}>
       <StatusBar style="dark" />
@@ -183,18 +214,120 @@ function PermissionScreen({ onGrant, onGallery }: { onGrant: () => void; onGalle
           <Text style={styles.permissionBtnText}>Grant camera access</Text>
         </LinearGradient>
       </TouchableOpacity>
-      <TouchableOpacity style={styles.permissionSecondary} onPress={onGallery}>
-        <ImageIcon size={18} color={Colors.primary} weight="bold" />
-        <Text style={styles.permissionSecondaryText}>Choose a label photo</Text>
-      </TouchableOpacity>
+      <View style={styles.permissionChoiceRow}>
+        <TouchableOpacity style={styles.permissionSecondary} onPress={onGallery}>
+          <ImageIcon size={18} color={Colors.primary} weight="bold" />
+          <Text style={styles.permissionSecondaryText}>Photos</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.permissionSecondary} onPress={onManual}>
+          <TextT size={18} color={Colors.primary} weight="bold" />
+          <Text style={styles.permissionSecondaryText}>Manual Entry</Text>
+        </TouchableOpacity>
+      </View>
     </View>
+  )
+}
+
+
+// ─── Manual entry ─────────────────────────────────────────────────────────────
+function ManualScreen({
+  value,
+  onChange,
+  onSubmit,
+  onBack,
+  error,
+  clearError,
+}: {
+  value: string
+  onChange: (text: string) => void
+  onSubmit: () => void
+  onBack: () => void
+  error?: string
+  clearError: () => void
+}) {
+  const insets = useSafeAreaInsets()
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.manualContainer}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <StatusBar style="dark" />
+      <View style={[styles.manualHeader, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity onPress={onBack} style={styles.cameraIconBtn} activeOpacity={0.8}>
+          <ArrowLeft size={22} color={Colors.textPrimary} weight="bold" />
+        </TouchableOpacity>
+        <Text style={styles.manualTitle}>Manual Entry</Text>
+        <View style={{ width: 42 }} />
+      </View>
+
+      <ScrollView
+        style={styles.manualScroll}
+        contentContainerStyle={styles.manualContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.manualSubtitle}>
+          Enter the ingredients exactly as shown on the label. INGRYN will analyze them directly.
+        </Text>
+
+        {error ? (
+          <View style={styles.errorBanner}>
+            <Warning size={14} color={Colors.danger} weight="fill" />
+            <Text style={styles.errorBannerText}>{error}</Text>
+            <TouchableOpacity
+              onPress={clearError}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <X size={14} color={Colors.danger} weight="bold" />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        <TextInput
+          style={styles.manualInput}
+          value={value}
+          onChangeText={(text) => {
+            onChange(text)
+            clearError()
+          }}
+          placeholder="Water, Sugar, Salt, Sodium Benzoate..."
+          placeholderTextColor={Colors.textTertiary}
+          multiline
+          numberOfLines={9}
+          autoFocus
+          textAlignVertical="top"
+        />
+
+        <Text style={styles.manualHint}>Comma-separated ingredients work best.</Text>
+
+        <TouchableOpacity
+          style={[styles.analyzeBtn, !value.trim() && styles.analyzeBtnDisabled, Shadows.primary]}
+          onPress={onSubmit}
+          disabled={!value.trim()}
+          activeOpacity={0.85}
+        >
+          <LinearGradient
+            colors={value.trim() ? [Colors.primary, Colors.primaryDark] : [Colors.border, Colors.border]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.analyzeBtnGradient}
+          >
+            <Scan size={18} color={value.trim() ? '#fff' : Colors.textTertiary} weight="bold" />
+            <Text style={[styles.analyzeBtnText, !value.trim() && styles.analyzeBtnTextDisabled]}>
+              Analyze ingredients
+            </Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      </ScrollView>
+    </KeyboardAvoidingView>
   )
 }
 
 // ─── Camera (stays dark) ──────────────────────────────────────────────────────
 function CameraScreen({
   cameraRef, cameraActive, cameraReady, onCameraReady,
-  flash, onFlashToggle, onCapture, onGallery, onExit,
+  flash, onFlashToggle, onCapture, onGallery, onManual, onExit,
   error, clearError,
   detectionState, guidanceMessage, isScanning,
 }: {
@@ -206,6 +339,7 @@ function CameraScreen({
   onFlashToggle: () => void
   onCapture: () => void
   onGallery: () => void
+  onManual: () => void
   onExit: () => void
   error?: string
   clearError: () => void
@@ -333,13 +467,12 @@ function CameraScreen({
           </View>
         </TouchableOpacity>
 
-        <View style={styles.autoControl}>
-          <View style={[styles.autoBadge, autoDetected && styles.autoBadgeActive]}>
-            <View style={[styles.autoBadgeDot, autoDetected && styles.autoBadgeDotActive]} />
-            <Text style={styles.autoBadgeText}>{autoDetected ? 'Reading' : 'Auto'}</Text>
+        <TouchableOpacity style={styles.manualControl} onPress={onManual} activeOpacity={0.85}>
+          <View style={styles.manualIcon}>
+            <TextT size={22} color="#fff" weight="regular" />
           </View>
-          <Text style={styles.galleryLabel}>Instant</Text>
-        </View>
+          <Text style={styles.galleryLabel}>Manual</Text>
+        </TouchableOpacity>
       </View>
     </View>
   )
@@ -367,6 +500,7 @@ const styles = StyleSheet.create({
   permissionBtn: { width: '100%', borderRadius: Radius.xl, overflow: 'hidden', marginTop: Spacing.md },
   permissionBtnGradient: { paddingVertical: Spacing.xl, alignItems: 'center' },
   permissionBtnText: { fontFamily: Fonts.bold, fontSize: FontSizes.lg, color: '#fff' },
+  permissionChoiceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing['2xl'] },
   permissionSecondary: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: Spacing.md },
   permissionSecondaryText: { fontFamily: Fonts.semibold, fontSize: FontSizes.base, color: Colors.primary },
 
@@ -406,10 +540,22 @@ const styles = StyleSheet.create({
   captureOuter: { width: 82, height: 82, borderRadius: 41, borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
   captureInner: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#fff' },
 
-  autoControl: { width: 72, alignItems: 'center', gap: 7 },
-  autoBadge: { minWidth: 50, height: 50, paddingHorizontal: 9, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.11)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 },
-  autoBadgeActive: { backgroundColor: `${Colors.primary}22`, borderColor: `${Colors.primary}88` },
-  autoBadgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.7)' },
-  autoBadgeDotActive: { backgroundColor: Colors.primary },
-  autoBadgeText: { fontFamily: Fonts.semibold, fontSize: FontSizes.xs, color: '#fff' },
+  manualControl: { width: 72, alignItems: 'center', gap: 7 },
+  manualIcon: { width: 50, height: 50, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.11)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', alignItems: 'center', justifyContent: 'center' },
+
+  manualContainer: { flex: 1, backgroundColor: Colors.background },
+  manualHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: Spacing['2xl'], marginBottom: Spacing.md },
+  manualTitle: { fontFamily: Fonts.bold, fontSize: FontSizes.xl, color: Colors.textPrimary },
+  manualScroll: { flex: 1 },
+  manualContent: { paddingHorizontal: Spacing['2xl'], paddingBottom: 48, paddingTop: Spacing.md },
+  manualSubtitle: { fontFamily: Fonts.regular, fontSize: FontSizes.base, color: Colors.textSecondary, lineHeight: 24, marginBottom: Spacing.lg },
+  errorBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.dangerLight, borderRadius: Radius.xl, padding: Spacing.lg, marginBottom: Spacing.lg },
+  errorBannerText: { flex: 1, fontFamily: Fonts.medium, fontSize: FontSizes.sm, color: Colors.danger, lineHeight: 18 },
+  manualInput: { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.xl, paddingHorizontal: Spacing.xl, paddingVertical: Spacing.xl, fontFamily: Fonts.regular, fontSize: FontSizes.base, color: Colors.textPrimary, minHeight: 180, marginBottom: Spacing.sm, lineHeight: 24, ...Shadows.sm },
+  manualHint: { fontFamily: Fonts.regular, fontSize: FontSizes.xs, color: Colors.textTertiary, marginBottom: Spacing['2xl'] },
+  analyzeBtn: { borderRadius: Radius.xl, overflow: 'hidden' },
+  analyzeBtnDisabled: { opacity: 0.5 },
+  analyzeBtnGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.md, paddingVertical: Spacing.xl },
+  analyzeBtnText: { fontFamily: Fonts.bold, fontSize: FontSizes.lg, color: '#fff' },
+  analyzeBtnTextDisabled: { color: Colors.textTertiary },
 })
