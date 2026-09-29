@@ -66,6 +66,7 @@ async function saveScan({
   text,
   safetyScore,
   ingredientIds,
+  analysisStatus,
 }: {
   userId: string
   text: string
