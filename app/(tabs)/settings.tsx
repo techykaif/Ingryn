@@ -132,10 +132,11 @@ export default function SettingsScreen() {
     if (!user?.id) return
     setDeleting(true)
     try {
-      const { error } = await supabase.rpc('delete_user_account', {
-        target_user_id: user?.id,
-      })
+      const { data, error } = await supabase.functions.invoke('delete-account')
       if (error) throw error
+      if (!data?.success) {
+        throw new Error(data?.error || 'Could not delete account. Please try again.')
+      }
       await revokeGoogleAccess()
       await supabase.auth.signOut()
       setUser(null)
