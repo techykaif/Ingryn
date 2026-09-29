@@ -281,7 +281,7 @@ Release Hardening
 The detailed product specification is intentionally kept out of the root README.
 
 - **Product Requirements:** [`docs/PRD/`](docs/PRD/)
-- **Current PRD:** [`docs/PRD/PRD-v2.4.md`](docs/PRD/PRD-v2.4.md)
+- **Current PRD:** [`docs/PRD/PRD-v2.5.md`](docs/PRD/PRD-v2.5.md)
 - **Engineering Audit:** [`audit.md`](audit.md)
 
 PRDs are versioned so historical product decisions remain traceable instead of being overwritten by future requirements.
