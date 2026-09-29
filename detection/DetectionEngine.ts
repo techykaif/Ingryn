@@ -146,8 +146,7 @@ export class DetectionEngine {
     const density = textDensityScore(text)
 
     // ── Step 4: Calculate ingredient confidence before nutrition classification ──
-    // This is important because nutrition terms also occur inside ingredient
-    // names (e.g. sodium citrate, calcium phosphate, vitamin A palmitate).
+    // Nutrient names are common inside legitimate ingredient lists.
     const confidence =
       keywordScore * W_KEYWORD +
       ingredientMatchScore * W_INGREDIENT_MATCH +
@@ -155,17 +154,15 @@ export class DetectionEngine {
       density * W_DENSITY
 
     const hasIngredientHeader =
-      /(?:^|\\b)(?:ingredients?|composition|active ingredients|inactive ingredients|other ingredients)\\s*:/i.test(text)
+      /(?:^|\b)(?:ingredients?|composition|active ingredients|inactive ingredients|other ingredients)\s*:/i.test(text)
 
     const hasStrongNutritionSignal = this.hasStrongNutritionSignal(lower)
 
     // ── Step 5: Nutrition classification ──
-    // A generic nutrient-word count is not enough. An ingredient list with
-    // "sodium", "calcium", "magnesium", "vitamin", etc. can otherwise score
-    // 100% as nutrition and remain red forever.
-    //
-    // If an explicit ingredient header is present, require a strong nutrition
-    // signal before allowing nutrition classification.
+    // Generic terms such as sodium/calcium/vitamin must not classify an
+    // ingredient list as Nutrition Facts. A nutrition table needs a
+    // nutrition-specific signal such as calories, serving size, daily value,
+    // or a macro/serving label.
     if (
       nutritionScore >= NUTRITION_THRESHOLD &&
       nutritionScore > confidence &&
@@ -203,6 +200,7 @@ export class DetectionEngine {
         [],
         'Ingredient list detected!'
       )
+    }
 
     if (confidence >= INGREDIENT_LOW_THRESHOLD) {
       return this.buildResult(
@@ -213,10 +211,11 @@ export class DetectionEngine {
         [],
         'Possible ingredient list. Hold steady...'
       )
+    }
 
     // ── Fallback ──
     let guidance = 'Point at ingredient list'
-    if (nutritionScore > 0.2) {
+    if (nutritionScore > 0.2 && hasStrongNutritionSignal) {
       guidance = 'This looks like the Nutrition Facts table. Please scan the Ingredients section.'
     }
     if (quality.issues.length > 0) {
