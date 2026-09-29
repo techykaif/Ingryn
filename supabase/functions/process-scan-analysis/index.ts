@@ -90,9 +90,9 @@ Deno.serve(async (req: Request) => {
         analysis_error: null,
         analysis_updated_at: new Date().toISOString(),
       })
-      .eq("id", typedScan.id)
+      .eq("id", scan.id)
 
-    const sourceIngredients = parseIngredientNames(typedScan.raw_ocr_text ?? "")
+    const sourceIngredients = parseIngredientNames(scan.raw_ocr_text ?? "")
     if (sourceIngredients.length === 0) {
       await admin
         .from("scans")
@@ -101,10 +101,10 @@ Deno.serve(async (req: Request) => {
           analysis_error: "No ingredients could be identified.",
           analysis_updated_at: new Date().toISOString(),
         })
-        .eq("id", typedScan.id)
+        .eq("id", scan.id)
 
       await markJobFailed(admin, job.job_id, job.attempts, "No ingredients could be identified.")
-      return json({ processed: true, scanId: typedScan.id, status: "failed" })
+      return json({ processed: true, scanId: scan.id, status: "failed" })
     }
 
     let ingredientNames = job.ingredient_names
@@ -120,9 +120,9 @@ Deno.serve(async (req: Request) => {
       )
 
       if (ingredientNames.length === 0) {
-        await syncScanFromCache(admin, typedScan, initialCache, sourceIngredients)
+        await syncScanFromCache(admin, scan, initialCache, sourceIngredients)
         await markJobComplete(admin, job.job_id)
-        return json({ processed: true, scanId: typedScan.id, status: "completed" })
+        return json({ processed: true, scanId: scan.id, status: "completed" })
       }
 
       cursor = 0
@@ -144,7 +144,7 @@ Deno.serve(async (req: Request) => {
         (name) => !finalCache.has(normalizeCacheKey(name)),
       )
 
-      await syncScanFromCache(admin, typedScan, finalCache, sourceIngredients)
+      await syncScanFromCache(admin, scan, finalCache, sourceIngredients)
 
       const status = unresolved.length > 0 ? "partial" : "completed"
       const message = unresolved.length > 0
@@ -158,10 +158,10 @@ Deno.serve(async (req: Request) => {
           analysis_error: message,
           analysis_updated_at: new Date().toISOString(),
         })
-        .eq("id", typedScan.id)
+        .eq("id", scan.id)
 
       await markJobComplete(admin, job.job_id)
-      return json({ processed: true, scanId: typedScan.id, status })
+      return json({ processed: true, scanId: scan.id, status })
     }
 
     const chunk = ingredientNames.slice(cursor, cursor + CHUNK_SIZE)
@@ -173,7 +173,7 @@ Deno.serve(async (req: Request) => {
     if (uncachedChunk.length > 0) {
       await analyzeChunk(
         uncachedChunk.join(", "),
-        typedScan.user_id,
+        scan.user_id,
         req,
       )
     }
@@ -182,7 +182,7 @@ Deno.serve(async (req: Request) => {
     // makes the worker idempotent if Gemini completed a write but the process
     // died before the scan/job state was advanced.
     const cacheAfter = await findCachedIngredients(admin, sourceIngredients)
-    const ids = mergeIngredientIds(typedScan.ingredient_ids ?? [], cacheAfter)
+    const ids = mergeIngredientIds(scan.ingredient_ids ?? [], cacheAfter)
     const score = calculateSafetyScore(
       Array.from(cacheAfter.values()).map((ingredient) => ingredient.safety_level),
     )
@@ -206,7 +206,7 @@ Deno.serve(async (req: Request) => {
           : null,
         analysis_updated_at: new Date().toISOString(),
       })
-      .eq("id", typedScan.id)
+      .eq("id", scan.id)
 
     if (scanUpdateError) throw scanUpdateError
 
@@ -214,7 +214,7 @@ Deno.serve(async (req: Request) => {
       await markJobComplete(admin, job.job_id)
       return json({
         processed: true,
-        scanId: typedScan.id,
+        scanId: scan.id,
         status: unresolvedAfterChunk.length > 0 ? "partial" : "completed",
       })
     }
@@ -234,7 +234,7 @@ Deno.serve(async (req: Request) => {
 
     return json({
       processed: true,
-      scanId: typedScan.id,
+      scanId: scan.id,
       status: "processing",
       processedIngredients: nextCursor,
       totalIngredients: ingredientNames.length,
@@ -373,7 +373,7 @@ async function syncScanFromCache(
   cache: Map<string, CachedIngredient>,
   _sourceIngredients: string[],
 ) {
-  const ids = mergeIngredientIds(typedScan.ingredient_ids ?? [], cache)
+  const ids = mergeIngredientIds(scan.ingredient_ids ?? [], cache)
   const score = calculateSafetyScore(
     Array.from(cache.values()).map((ingredient) => ingredient.safety_level),
   )
