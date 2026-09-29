@@ -2,6 +2,11 @@ import { supabase } from '@/lib/supabase'
 import { analyzeIngredients, type IngredientAnalysis } from '@/lib/gemini'
 import { useScanProgressStore, type DietaryPreferences } from '@/store'
 import { splitIngredientText } from '@/lib/ingredientParser'
+import {
+  appendNewIngredientResults,
+  calculateSafetyScore,
+  getSafetyWeight,
+} from '@/lib/scanScoring'
 
 export async function saveAnalysis(
   text: string,
@@ -15,18 +20,32 @@ export async function saveAnalysis(
       throw new Error('No ingredients could be identified')
     }
 
-    // Step 1: Check cache for all ingredients at once
-    const { cachedIds, unknownNames } = await checkCache(ingredientNames)
+    // Step 1: Check cache for all ingredients at once. The cache query also
+    // returns safety_level, so scoring does not require a second DB request.
+    const { cachedIngredients, cachedIds, unknownNames } = await checkCache(ingredientNames)
 
-    // Step 2: Create scan immediately with cached ingredients
-    const allIngredients = await fetchIngredientsByIds(cachedIds)
-    const safetyScore = calculateSafetyScore(allIngredients)
+    // Step 2: Create scan immediately with cached ingredients.
+    const safetyScore = calculateSafetyScore(
+      cachedIngredients.map((ingredient) => ingredient.safety_level),
+    )
     const scanId = await saveScan({ userId, text, safetyScore, ingredientIds: cachedIds })
 
     // Step 3: Process unknown ingredients progressively in background
     if (unknownNames.length > 0) {
       useScanProgressStore.getState().setActiveScan(scanId, true)
-      processUnknownIngredientsInBackground(scanId, unknownNames, cachedIds, preferences).catch(console.error)
+      const cachedTotal = cachedIngredients.reduce(
+        (sum, ingredient) => sum + getSafetyWeight(ingredient.safety_level),
+        0,
+      )
+
+      processUnknownIngredientsInBackground(
+        scanId,
+        unknownNames,
+        cachedIds,
+        cachedTotal,
+        cachedIngredients.length,
+        preferences,
+      ).catch(console.error)
     }
 
     return { scanId }
@@ -72,16 +91,25 @@ async function processUnknownIngredientsInBackground(
       const chunk = unknownNames.slice(i, i + chunkSize)
       try {
         const analysis = await analyzeIngredients(chunk.join(', '), preferences)
-        const newIds = await saveIngredients(analysis)
-        
-        currentIds = [...currentIds, ...newIds]
-        const allIngredients = await fetchIngredientsByIds(currentIds)
-        const safetyScore = calculateSafetyScore(allIngredients)
-        
-        await supabase
-          .from('scans')
-          .update({ ingredient_ids: currentIds, safety_score: safetyScore })
-          .eq('id', scanId)
+        const merged = appendNewIngredientResults(currentIds, analysis)
+
+        currentIds = merged.ingredientIds
+        currentTotal += merged.newSafetyLevels.reduce(
+          (sum, level) => sum + getSafetyWeight(level),
+          0,
+        )
+        currentCount += merged.newSafetyLevels.length
+
+        // Gemini already returns safety_level for the newly persisted records,
+        // so avoid re-fetching the entire ingredient set after every batch.
+        if (merged.newSafetyLevels.length > 0) {
+          const safetyScore = Math.round(currentTotal / currentCount)
+
+          await supabase
+            .from('scans')
+            .update({ ingredient_ids: currentIds, safety_score: safetyScore })
+            .eq('id', scanId)
+        }
       } catch (e) {
         console.warn('Failed to process chunk', chunk, e)
       }
@@ -105,50 +133,31 @@ export function parseIngredientNames(text: string): string[] {
     })
 }
 
-// Single Supabase query to check which ingredients are already cached
+// Single Supabase query to check which ingredients are already cached.
+// Include safety_level so the initial scan score can be calculated without
+// another round trip.
 async function checkCache(names: string[]): Promise<{
+  cachedIngredients: { id: string; name: string; safety_level: string }[]
   cachedIds: string[]
   unknownNames: string[]
 }> {
   const { data: existing, error } = await supabase
     .from('ingredients')
-    .select('id, name')
+    .select('id, name, safety_level')
     .in('name', names)
 
   if (error) throw error
 
-  const cachedIds: string[] = []
-  const cachedNames = new Set<string>()
+  const cachedIngredients = (existing || []) as {
+    id: string
+    name: string
+    safety_level: string
+  }[]
+  const cachedIds = cachedIngredients.map((row) => row.id)
+  const cachedNames = new Set(cachedIngredients.map((row) => row.name))
+  const unknownNames = names.filter((name) => !cachedNames.has(name))
 
-  for (const row of existing || []) {
-    cachedIds.push(row.id)
-    cachedNames.add(row.name)
-  }
-
-  const unknownNames = names.filter(n => !cachedNames.has(n))
-
-  return { cachedIds, unknownNames }
-}
-
-// Fetch ingredients by IDs to calculate safety score
-async function fetchIngredientsByIds(
-  ids: string[]
-): Promise<{ safety_level: string }[]> {
-  if (ids.length === 0) return []
-  const { data, error } = await supabase
-    .from('ingredients')
-    .select('safety_level')
-    .in('id', ids)
-  if (error) throw error
-  return (data || []) as { safety_level: string }[]
-}
-
-// Gemini now persists unknown ingredients server-side and returns
-// their database IDs. The client must never write shared ingredient records.
-async function saveIngredients(analysis: IngredientAnalysis[]): Promise<string[]> {
-  return analysis
-    .map((ingredient) => ingredient.id)
-    .filter((id): id is string => Boolean(id))
+  return { cachedIngredients, cachedIds, unknownNames }
 }
 
 async function saveScan({
@@ -178,16 +187,3 @@ async function saveScan({
   return scan.id
 }
 
-function calculateSafetyScore(ingredients: { safety_level: string }[]): number {
-  if (!ingredients.length) return 50
-  const weights: Record<string, number> = {
-    safe: 100,
-    caution: 50,
-    harmful: 0,
-    unknown: 60,
-  }
-  const total = ingredients.reduce((sum, i) => {
-    return sum + (weights[i.safety_level] ?? 60)
-  }, 0)
-  return Math.round(total / ingredients.length)
-}
