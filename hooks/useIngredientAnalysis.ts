@@ -148,6 +148,8 @@ async function saveIngredients(analysis: IngredientAnalysis[]): Promise<string[]
   // returns is only valid for whichever user's preferences triggered this
   // particular analysis. Persisting it would leak that user's health context
   // to every other user who later hits the cache for this ingredient.
+  // Country-specific regulatory status is maintained separately in
+  // ingredient_country_rules and verified by the country-rule refresh pipeline.
   // Personal relevance is computed per-viewer, client-side, in getPersonalFlag()
   // on the results screen instead.
   const normalizedIngredients = analysis
@@ -158,7 +160,6 @@ async function saveIngredients(analysis: IngredientAnalysis[]): Promise<string[]
       description: ingredient.description || '',
       safety_level: ingredient.safety_level || 'unknown',
       health_concerns: ingredient.health_concerns || [],
-      country_status: ingredient.country_status || {},
     }))
     .filter(item => item.name.length > 0)
 
@@ -183,7 +184,6 @@ async function saveIngredients(analysis: IngredientAnalysis[]): Promise<string[]
         description: item.description,
         safety_level: item.safety_level,
         health_concerns: item.health_concerns,
-        country_status: item.country_status,
       })), { onConflict: 'name', ignoreDuplicates: true })
       .select('id, name')
 
