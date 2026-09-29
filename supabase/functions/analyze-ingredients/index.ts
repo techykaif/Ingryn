@@ -165,24 +165,10 @@ async function recordGeminiUsage(
   unknownIngredientCount: number,
 ) {
   try {
-    const usageDate = new Date().toISOString().slice(0, 10)
-
-    await admin
-      .from("ai_usage_daily")
-      .upsert(
-        {
-          user_id: userId,
-          usage_date: usageDate,
-          gemini_requests: 1,
-          unknown_ingredients: unknownIngredientCount,
-          updated_at: new Date().toISOString(),
-        },
-        {
-          onConflict: "user_id,usage_date",
-          ignoreDuplicates: false,
-        },
-      )
-      .select("user_id")
+    await admin.rpc("record_gemini_usage", {
+      p_user_id: userId,
+      p_unknown_ingredient_count: unknownIngredientCount,
+    })
   } catch {
     // Telemetry is intentionally non-blocking.
   }
