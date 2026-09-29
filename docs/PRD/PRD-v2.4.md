@@ -124,8 +124,10 @@ Personalized Results
 - Automatic ingredient-list detection and capture.
 - Tap-to-capture fallback.
 - Gallery selection.
+- Manual ingredient entry.
 - OCR extraction.
-- Direct OCR-to-analysis flow without an editable review screen.
+- Direct image OCR-to-analysis flow without an editable review screen.
+- Manual text-to-analysis flow.
 - Reset/retry flow.
 - Lifecycle-safe scanner state handling.
 
@@ -155,7 +157,7 @@ OCR
 Durable analysis pipeline
 ```
 
-Automatic capture is the primary path, with tap-to-capture and gallery selection available as fallbacks.
+Camera is the primary scan experience, with Photos and Manual Entry as alternate input modes. Camera and photo OCR bypass editable review and enter the analysis pipeline directly.
 
 ### AI Analysis
 
