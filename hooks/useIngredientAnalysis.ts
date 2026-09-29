@@ -92,3 +92,41 @@ async function saveScan({
   return scan.id
 }
 
+
+
+export function parseIngredientNames(text: string): string[] {
+  const seen = new Set<string>()
+
+  return splitIngredientText(text)
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length > 1 && part.length < 2000)
+    .filter((name) => {
+      if (seen.has(name)) return false
+      seen.add(name)
+      return true
+    })
+}
+
+async function checkCache(names: string[]): Promise<{
+  cachedIngredients: { id: string; name: string; safety_level: string }[]
+  cachedIds: string[]
+  unknownNames: string[]
+}> {
+  const { data: existing, error } = await supabase
+    .from('ingredients')
+    .select('id, name, safety_level')
+    .in('name', names)
+
+  if (error) throw error
+
+  const cachedIngredients = (existing || []) as {
+    id: string
+    name: string
+    safety_level: string
+  }[]
+  const cachedIds = cachedIngredients.map((row) => row.id)
+  const cachedNames = new Set(cachedIngredients.map((row) => row.name))
+  const unknownNames = names.filter((name) => !cachedNames.has(name))
+
+  return { cachedIngredients, cachedIds, unknownNames }
+}
