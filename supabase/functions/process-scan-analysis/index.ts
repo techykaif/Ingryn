@@ -1,5 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-import { createClient } from "jsr:@supabase/supabase-js@2"
+import {
+  createClient,
+  type SupabaseClient,
+} from "jsr:@supabase/supabase-js@2"
 import {
   SCAN_ANALYSIS_CHUNK_SIZE,
   calculateSafetyScore,
@@ -14,6 +17,7 @@ import {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? ""
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
 const ANALYZE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/analyze-ingredients`
+type WorkerAdminClient = SupabaseClient<any, "public", "public", any, any>
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -331,7 +335,7 @@ Deno.serve(async (req: Request) => {
 
 async function isValidWorkerRequest(
   req: Request,
-  admin: ReturnType<typeof createClient>,
+  admin: WorkerAdminClient,
 ): Promise<boolean> {
   const suppliedToken = req.headers.get("x-scan-worker-token")
   if (!suppliedToken) return false
@@ -380,7 +384,7 @@ async function analyzeChunk(
 }
 
 async function findCachedIngredients(
-  admin: ReturnType<typeof createClient>,
+  admin: WorkerAdminClient,
   names: string[],
 ): Promise<Map<string, CachedIngredient>> {
   const normalizedNames = names.map(normalizeCacheKey)
@@ -402,7 +406,7 @@ async function findCachedIngredients(
 }
 
 async function syncScanFromCache(
-  admin: ReturnType<typeof createClient>,
+  admin: WorkerAdminClient,
   scan: ScanRow,
   cache: Map<string, CachedIngredient>,
 ) {
@@ -420,7 +424,7 @@ async function syncScanFromCache(
 }
 
 async function markJobComplete(
-  admin: ReturnType<typeof createClient>,
+  admin: WorkerAdminClient,
   jobId: string,
 ) {
   await updateJob(admin, jobId, {
@@ -434,7 +438,7 @@ async function markJobComplete(
 }
 
 async function updateScan(
-  admin: ReturnType<typeof createClient>,
+  admin: WorkerAdminClient,
   scanId: string,
   values: Record<string, unknown>,
 ) {
@@ -447,7 +451,7 @@ async function updateScan(
 }
 
 async function updateJob(
-  admin: ReturnType<typeof createClient>,
+  admin: WorkerAdminClient,
   jobId: string,
   values: Record<string, unknown>,
 ) {
@@ -460,7 +464,7 @@ async function updateJob(
 }
 
 async function markJobFailed(
-  admin: ReturnType<typeof createClient>,
+  admin: WorkerAdminClient,
   jobId: string,
   attempts: number,
   message: string,
