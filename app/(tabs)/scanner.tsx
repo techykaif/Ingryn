@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  ActivityIndicator,
-  Platform, useWindowDimensions, InteractionManager
+  useWindowDimensions, InteractionManager
 } from 'react-native'
 import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, withSequence, Easing, withDelay } from 'react-native-reanimated'
 import { CameraView, useCameraPermissions } from 'expo-camera'
@@ -15,7 +14,6 @@ import { useScanner, IS_WEB } from '@/hooks/useScanner'
 import { useRealtimeDetection } from '@/hooks/useRealtimeDetection'
 import { Colors, Fonts, FontSizes, Spacing, Radius, Shadows } from '@/constants/theme'
 import type { DetectionState } from '@/detection/CameraStateMachine'
-import type { DetectionClassification } from '@/detection/DetectionEngine'
 import {
   Image as ImageIcon, Lightning, LightningSlash,
   Scan, ArrowLeft, Camera, Warning, X
@@ -58,8 +56,6 @@ export default function ScannerScreen() {
 
   const {
     detectionState,
-    confidence,
-    classification,
     guidanceMessage,
     isScanning,
     startScanning,
@@ -115,6 +111,7 @@ export default function ScannerScreen() {
       onFlashToggle={() => setFlash(!flash)}
       onCapture={handleCapture}
       onGallery={handleGalleryPick}
+      onExit={() => router.back()}
       error={scanError?.message}
       clearError={clearError}
       detectionState={detectionState}
@@ -199,9 +196,9 @@ function PermissionScreen({ onGrant, onGallery }: { onGrant: () => void; onGalle
 // ─── Camera (stays dark) ──────────────────────────────────────────────────────
 function CameraScreen({
   cameraRef, cameraActive, cameraReady, onCameraReady,
-  flash, onFlashToggle, onCapture, onGallery,
+  flash, onFlashToggle, onCapture, onGallery, onExit,
   error, clearError,
-  detectionState, confidence, guidanceMessage, isScanning,
+  detectionState, guidanceMessage, isScanning,
 }: {
   cameraRef: React.RefObject<CameraView | null>
   cameraActive: boolean
@@ -211,6 +208,7 @@ function CameraScreen({
   onFlashToggle: () => void
   onCapture: () => void
   onGallery: () => void
+  onExit: () => void
   error?: string
   clearError: () => void
   detectionState: DetectionState
@@ -254,7 +252,7 @@ function CameraScreen({
       />
 
       <View style={[styles.cameraTopBar, { paddingTop: insets.top + 10 }]}>
-        <TouchableOpacity style={styles.cameraIconBtn} onPress={() => {}}>
+        <TouchableOpacity style={styles.cameraIconBtn} onPress={onExit} activeOpacity={0.8}>
           <ArrowLeft size={22} color="#fff" weight="bold" />
         </TouchableOpacity>
 
@@ -351,7 +349,6 @@ function CameraScreen({
 }
 
 const styles = StyleSheet.create({
-  processingContainer: { flex: 1, backgroundColor: Colors.background, alignItems: 'center', justifyContent: 'const styles = StyleSheet.create({
   processingContainer: { flex: 1, backgroundColor: Colors.background, alignItems: 'center', justifyContent: 'center', gap: Spacing.lg, paddingHorizontal: Spacing['3xl'] },
   processingRingsContainer: { width: 140, height: 140, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.md },
   pulseRing: { position: 'absolute', width: 80, height: 80, borderRadius: 40, backgroundColor: Colors.primary },
