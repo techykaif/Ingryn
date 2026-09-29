@@ -1,11 +1,20 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "jsr:@supabase/supabase-js@2"
+import {
+  SCAN_ANALYSIS_CHUNK_SIZE,
+  MAX_SCAN_ANALYSIS_RETRIES,
+  calculateSafetyScore,
+  getAnalysisStatus,
+  getRetryDelaySeconds,
+  mergeIngredientIds,
+  normalizeCacheKey,
+  parseIngredientNames,
+  shouldFailAfterRetry,
+} from "./logic.ts"
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? ""
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
 const ANALYZE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/analyze-ingredients`
-const CHUNK_SIZE = 20
-const MAX_ATTEMPTS = 5
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,6 +34,7 @@ type ScanRow = {
   user_id: string
   raw_ocr_text: string | null
   ingredient_ids: string[] | null
+  analysis_status: "pending" | "processing" | "completed" | "partial" | "failed"
 }
 
 type CachedIngredient = {
@@ -70,7 +80,7 @@ Deno.serve(async (req: Request) => {
   try {
     const { data: rawScan, error: scanError } = await admin
       .from("scans")
-      .select("id, user_id, raw_ocr_text, ingredient_ids")
+      .select("id, user_id, raw_ocr_text, ingredient_ids, analysis_status")
       .eq("id", job.scan_id)
       .maybeSingle()
 
@@ -83,14 +93,31 @@ Deno.serve(async (req: Request) => {
       return json({ processed: true, scanId: job.scan_id, reason: "scan_missing" })
     }
 
-    await admin
-      .from("scans")
-      .update({
-        analysis_status: "processing",
-        analysis_error: null,
-        analysis_updated_at: new Date().toISOString(),
+    if (scan.analysis_status === "completed" || scan.analysis_status === "partial") {
+      await markJobComplete(admin, job.job_id)
+      return json({
+        processed: true,
+        scanId: scan.id,
+        status: scan.analysis_status,
+        reason: "scan_already_final",
       })
-      .eq("id", scan.id)
+    }
+
+    if (scan.analysis_status === "failed") {
+      await markJobFailed(admin, job.job_id, job.attempts, "Scan already marked failed.")
+      return json({
+        processed: true,
+        scanId: scan.id,
+        status: "failed",
+        reason: "scan_already_failed",
+      })
+    }
+
+    await updateScan(admin, scan.id, {
+      analysis_status: "processing",
+      analysis_error: null,
+      analysis_updated_at: new Date().toISOString(),
+    })
 
     const sourceIngredients = parseIngredientNames(scan.raw_ocr_text ?? "")
     if (sourceIngredients.length === 0) {
@@ -107,6 +134,15 @@ Deno.serve(async (req: Request) => {
       return json({ processed: true, scanId: scan.id, status: "failed" })
     }
 
+    const { data: retryState, error: retryStateError } = await admin
+      .from("scan_analysis_jobs")
+      .select("retry_count")
+      .eq("id", job.job_id)
+      .single()
+
+    if (retryStateError) throw retryStateError
+
+    let retryCount = retryState.retry_count
     let ingredientNames = job.ingredient_names
     let cursor = job.ingredient_cursor
 
@@ -120,15 +156,12 @@ Deno.serve(async (req: Request) => {
       )
 
       if (ingredientNames.length === 0) {
-        await syncScanFromCache(admin, scan, initialCache, sourceIngredients)
-        await admin
-          .from("scans")
-          .update({
-            analysis_status: "completed",
-            analysis_error: null,
-            analysis_updated_at: new Date().toISOString(),
-          })
-          .eq("id", scan.id)
+        await syncScanFromCache(admin, scan, initialCache)
+        await updateScan(admin, scan.id, {
+          analysis_status: "completed",
+          analysis_error: null,
+          analysis_updated_at: new Date().toISOString(),
+        })
         await markJobComplete(admin, job.job_id)
         return json({ processed: true, scanId: scan.id, status: "completed" })
       }
@@ -159,20 +192,17 @@ Deno.serve(async (req: Request) => {
         ? `${unresolved.length} ingredient(s) could not be analyzed.`
         : null
 
-      await admin
-        .from("scans")
-        .update({
-          analysis_status: status,
-          analysis_error: message,
-          analysis_updated_at: new Date().toISOString(),
-        })
-        .eq("id", scan.id)
+      await updateScan(admin, scan.id, {
+        analysis_status: status,
+        analysis_error: message,
+        analysis_updated_at: new Date().toISOString(),
+      })
 
       await markJobComplete(admin, job.job_id)
       return json({ processed: true, scanId: scan.id, status })
     }
 
-    const chunk = ingredientNames.slice(cursor, cursor + CHUNK_SIZE)
+    const chunk = ingredientNames.slice(cursor, cursor + SCAN_ANALYSIS_CHUNK_SIZE)
     const cacheBefore = await findCachedIngredients(admin, sourceIngredients)
     const uncachedChunk = chunk.filter(
       (name) => !cacheBefore.has(normalizeCacheKey(name)),
@@ -200,23 +230,23 @@ Deno.serve(async (req: Request) => {
       (name) => !cacheAfter.has(normalizeCacheKey(name)),
     )
 
-    const { error: scanUpdateError } = await admin
-      .from("scans")
-      .update({
-        ingredient_ids: ids,
-        ingredient_count: ids.length,
-        safety_score: score,
-        analysis_status: nextCursor >= ingredientNames.length
-          ? (unresolvedAfterChunk.length > 0 ? "partial" : "completed")
-          : "processing",
-        analysis_error: nextCursor >= ingredientNames.length && unresolvedAfterChunk.length > 0
+    const nextStatus = getAnalysisStatus(
+      nextCursor,
+      ingredientNames.length,
+      unresolvedAfterChunk.length,
+    )
+
+    await updateScan(admin, scan.id, {
+      ingredient_ids: ids,
+      ingredient_count: ids.length,
+      safety_score: score,
+      analysis_status: nextStatus,
+      analysis_error:
+        nextStatus === "partial"
           ? `${unresolvedAfterChunk.length} ingredient(s) could not be analyzed.`
           : null,
-        analysis_updated_at: new Date().toISOString(),
-      })
-      .eq("id", scan.id)
-
-    if (scanUpdateError) throw scanUpdateError
+      analysis_updated_at: new Date().toISOString(),
+    })
 
     if (nextCursor >= ingredientNames.length) {
       await markJobComplete(admin, job.job_id)
@@ -227,18 +257,16 @@ Deno.serve(async (req: Request) => {
       })
     }
 
-    await admin
-      .from("scan_analysis_jobs")
-      .update({
-        status: "pending",
-        ingredient_cursor: nextCursor,
-        next_attempt_at: new Date().toISOString(),
-        locked_at: null,
-        lock_until: null,
-        last_error: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", job.job_id)
+    await updateJob(admin, job.job_id, {
+      status: "pending",
+      ingredient_cursor: nextCursor,
+      next_attempt_at: new Date().toISOString(),
+      locked_at: null,
+      lock_until: null,
+      retry_count: 0,
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    })
 
     return json({
       processed: true,
@@ -256,15 +284,14 @@ Deno.serve(async (req: Request) => {
       message,
     })
 
-    if (job.attempts >= MAX_ATTEMPTS) {
-      await admin
-        .from("scans")
-        .update({
-          analysis_status: "failed",
-          analysis_error: "Analysis could not be completed after multiple retries.",
-          analysis_updated_at: new Date().toISOString(),
-        })
-        .eq("id", job.scan_id)
+    const nextRetryCount = retryCount + 1
+
+    if (shouldFailAfterRetry(nextRetryCount)) {
+      await updateScan(admin, job.scan_id, {
+        analysis_status: "failed",
+        analysis_error: "Analysis could not be completed after multiple retries.",
+        analysis_updated_at: new Date().toISOString(),
+      })
 
       await markJobFailed(
         admin,
@@ -280,20 +307,18 @@ Deno.serve(async (req: Request) => {
       })
     }
 
-    const retryDelaySeconds = Math.min(600, 30 * (2 ** (job.attempts - 1)))
+    const retryDelaySeconds = getRetryDelaySeconds(nextRetryCount)
     const nextAttempt = new Date(Date.now() + retryDelaySeconds * 1000).toISOString()
 
-    await admin
-      .from("scan_analysis_jobs")
-      .update({
-        status: "pending",
-        next_attempt_at: nextAttempt,
-        locked_at: null,
-        lock_until: null,
-        last_error: message.slice(0, 2000),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", job.job_id)
+    await updateJob(admin, job.job_id, {
+      status: "pending",
+      next_attempt_at: nextAttempt,
+      locked_at: null,
+      lock_until: null,
+      retry_count: nextRetryCount,
+      last_error: message.slice(0, 2000),
+      updated_at: new Date().toISOString(),
+    })
 
     return json({
       processed: true,
@@ -379,39 +404,55 @@ async function syncScanFromCache(
   admin: ReturnType<typeof createClient>,
   scan: ScanRow,
   cache: Map<string, CachedIngredient>,
-  _sourceIngredients: string[],
 ) {
   const ids = mergeIngredientIds(scan.ingredient_ids ?? [], cache)
   const score = calculateSafetyScore(
     Array.from(cache.values()).map((ingredient) => ingredient.safety_level),
   )
 
-  const { error } = await admin
-    .from("scans")
-    .update({
-      ingredient_ids: ids,
-      ingredient_count: ids.length,
-      safety_score: score,
-      analysis_updated_at: new Date().toISOString(),
-    })
-    .eq("id", scan.id)
-
-  if (error) throw error
+  await updateScan(admin, scan.id, {
+    ingredient_ids: ids,
+    ingredient_count: ids.length,
+    safety_score: score,
+    analysis_updated_at: new Date().toISOString(),
+  })
 }
 
 async function markJobComplete(
   admin: ReturnType<typeof createClient>,
   jobId: string,
 ) {
+  await updateJob(admin, jobId, {
+    status: "completed",
+    retry_count: 0,
+    lock_until: null,
+    locked_at: null,
+    completed_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  })
+}
+
+async function updateScan(
+  admin: ReturnType<typeof createClient>,
+  scanId: string,
+  values: Record<string, unknown>,
+) {
+  const { error } = await admin
+    .from("scans")
+    .update(values)
+    .eq("id", scanId)
+
+  if (error) throw error
+}
+
+async function updateJob(
+  admin: ReturnType<typeof createClient>,
+  jobId: string,
+  values: Record<string, unknown>,
+) {
   const { error } = await admin
     .from("scan_analysis_jobs")
-    .update({
-      status: "completed",
-      lock_until: null,
-      locked_at: null,
-      completed_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
+    .update(values)
     .eq("id", jobId)
 
   if (error) throw error
@@ -442,90 +483,6 @@ async function markJobFailed(
       error,
     })
   }
-}
-
-function mergeIngredientIds(
-  currentIds: string[],
-  cache: Map<string, CachedIngredient>,
-): string[] {
-  const seen = new Set(currentIds)
-  const merged = [...currentIds]
-
-  for (const ingredient of cache.values()) {
-    if (seen.has(ingredient.id)) continue
-    seen.add(ingredient.id)
-    merged.push(ingredient.id)
-  }
-
-  return merged
-}
-
-function calculateSafetyScore(levels: readonly string[]): number {
-  if (levels.length === 0) return 50
-
-  const weights: Record<string, number> = {
-    safe: 100,
-    caution: 50,
-    harmful: 0,
-    unknown: 60,
-  }
-
-  const total = levels.reduce(
-    (sum, level) => sum + (weights[level] ?? weights.unknown),
-    0,
-  )
-
-  return Math.round(total / levels.length)
-}
-
-function parseIngredientNames(text: string): string[] {
-  const cleaned = text
-    .replace(/\n/g, ", ")
-    .replace(/[^\w\s,.;()\-\/]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-
-  const parts: string[] = []
-  let depth = 0
-  let start = 0
-
-  for (let index = 0; index < cleaned.length; index++) {
-    const char = cleaned[index]
-
-    if (char === "(") {
-      depth++
-      continue
-    }
-
-    if (char === ")") {
-      depth = Math.max(0, depth - 1)
-      continue
-    }
-
-    if ((char === "," || char === ";" || char === "\n") && depth === 0) {
-      const part = cleaned.slice(start, index).trim()
-      if (part.length > 1) parts.push(part)
-      start = index + 1
-    }
-  }
-
-  const lastPart = cleaned.slice(start).trim()
-  if (lastPart.length > 1) parts.push(lastPart)
-
-  const seen = new Set<string>()
-  return parts
-    .map((part) => part.toLowerCase().trim())
-    .filter((part) => part.length > 1 && part.length < 2000)
-    .filter((part) => {
-      if (seen.has(part)) return false
-      seen.add(part)
-      return true
-    })
-    .slice(0, 200)
-}
-
-function normalizeCacheKey(value: string): string {
-  return value.toLowerCase().replace(/\s+/g, " ").trim()
 }
 
 function json(body: Record<string, unknown>, status = 200) {
